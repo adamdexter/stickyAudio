@@ -6,8 +6,9 @@ Fixes the macOS bug where audio output defaults to the built-in speaker after wa
 
 1. **sleepwatcher** monitors system sleep/wake events
 2. When your Mac wakes, it triggers a script (`~/.wakeup`)
-3. The script uses **SwitchAudioSource** to set audio output to your 3.5mm device
-4. A 2-second delay ensures the system is fully awake before switching
+3. The script checks to make sure an output device/3.5mm plug is occupying the headphone port.
+4. If something is plugged in, the script uses **SwitchAudioSource** to set audio output to your 3.5mm device
+5. A 2-second delay ensures the system is fully awake before switching
 
 ## Installation
 
