@@ -77,14 +77,21 @@ LOG_FILE="$SCRIPT_DIR/audio-wake.log"
 sleep 2
 
 # Log the event
-echo "\$(date): Woke from sleep, setting audio to \$DEVICE" >> "\$LOG_FILE"
+echo "\$(date): Woke from sleep, checking for audio device: \$DEVICE" >> "\$LOG_FILE"
 
-# Set the audio output
-/opt/homebrew/bin/SwitchAudioSource -s "\$DEVICE" -t output 2>> "\$LOG_FILE"
+# Check if the headphone device is available (i.e., something is plugged in)
+if /opt/homebrew/bin/SwitchAudioSource -a -t output | grep -q "\$DEVICE"; then
+    echo "\$(date): Device '\$DEVICE' detected, switching audio output" >> "\$LOG_FILE"
 
-# Verify
-CURRENT=\$(/opt/homebrew/bin/SwitchAudioSource -c -t output)
-echo "\$(date): Current output is now: \$CURRENT" >> "\$LOG_FILE"
+    # Set the audio output
+    /opt/homebrew/bin/SwitchAudioSource -s "\$DEVICE" -t output 2>> "\$LOG_FILE"
+
+    # Verify
+    CURRENT=\$(/opt/homebrew/bin/SwitchAudioSource -c -t output)
+    echo "\$(date): Current output is now: \$CURRENT" >> "\$LOG_FILE"
+else
+    echo "\$(date): Device '\$DEVICE' not detected (nothing plugged in), skipping audio switch" >> "\$LOG_FILE"
+fi
 
 # Keep log file manageable (last 100 lines)
 tail -100 "\$LOG_FILE" > "\$LOG_FILE.tmp" && mv "\$LOG_FILE.tmp" "\$LOG_FILE"
