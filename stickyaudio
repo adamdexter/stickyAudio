@@ -7,6 +7,7 @@ SCRIPT_DIR="$HOME/.config/audio-wake-fix"
 LOG_FILE="$SCRIPT_DIR/audio-wake.log"
 DAEMON_LOG="$SCRIPT_DIR/daemon.log"
 DAEMON_PID_FILE="$SCRIPT_DIR/daemon.pid"
+PAUSE_FILE="$SCRIPT_DIR/paused"
 PLIST_SLEEPWATCHER="$HOME/Library/LaunchAgents/com.audio-wake-fix.sleepwatcher.plist"
 PLIST_DAEMON="$HOME/Library/LaunchAgents/com.audio-wake-fix.daemon.plist"
 CONFIG_FILE="$SCRIPT_DIR/config"
@@ -42,6 +43,8 @@ usage() {
     echo "  check       Run a single check (same as what the daemon does every 10s)"
     echo "  switch      Manually switch to the configured headphone device"
     echo "  watch       Live-monitor audio output changes in your terminal"
+    echo "  pause [min] Pause the daemon (default: indefinitely, or specify minutes)"
+    echo "  resume      Resume the daemon after pausing"
     echo "  doctor      Run full diagnostic checks and report problems"
     echo "  config      Show current configuration"
     echo "  help        Show this help message"
@@ -76,6 +79,24 @@ cmd_status() {
         echo -e "  ${GREEN}✓${NC} '$DEVICE' is available (headphones plugged in)"
     else
         echo -e "  ${YELLOW}✗${NC} '$DEVICE' not found (nothing plugged into headphone jack?)"
+    fi
+    echo ""
+
+    # Pause status
+    echo -e "${BLUE}Daemon Paused:${NC}"
+    if [ -f "$PAUSE_FILE" ]; then
+        PAUSE_UNTIL=$(cat "$PAUSE_FILE" 2>/dev/null)
+        if [ "$PAUSE_UNTIL" = "indefinite" ]; then
+            echo -e "  ${YELLOW}PAUSED indefinitely${NC} (run 'stickyaudio resume' to unpause)"
+        elif [ -n "$PAUSE_UNTIL" ] && [ "$(date +%s)" -lt "$PAUSE_UNTIL" ] 2>/dev/null; then
+            REMAINING=$(( (PAUSE_UNTIL - $(date +%s)) / 60 ))
+            echo -e "  ${YELLOW}PAUSED${NC} (~${REMAINING}m remaining)"
+        else
+            echo -e "  ${GREEN}Not paused${NC} (pause file expired)"
+            rm -f "$PAUSE_FILE"
+        fi
+    else
+        echo -e "  ${GREEN}Not paused${NC}"
     fi
     echo ""
 
@@ -219,6 +240,31 @@ cmd_switch() {
     "$SAS" -s "$DEVICE" -t output 2>/dev/null
     CURRENT=$("$SAS" -c -t output 2>/dev/null)
     echo -e "Current output: ${GREEN}$CURRENT${NC}"
+}
+
+cmd_pause() {
+    MINUTES="$1"
+    if [ -z "$MINUTES" ]; then
+        echo "indefinite" > "$PAUSE_FILE"
+        echo -e "${YELLOW}Daemon paused indefinitely.${NC}"
+        echo "The daemon will not correct audio output until you run:"
+        echo "  stickyaudio resume"
+    else
+        UNTIL=$(( $(date +%s) + MINUTES * 60 ))
+        echo "$UNTIL" > "$PAUSE_FILE"
+        echo -e "${YELLOW}Daemon paused for ${MINUTES} minutes.${NC}"
+        echo "It will automatically resume at $(date -r "$UNTIL" '+%H:%M:%S' 2>/dev/null || date -d "@$UNTIL" '+%H:%M:%S' 2>/dev/null)."
+        echo "Or run 'stickyaudio resume' to resume immediately."
+    fi
+}
+
+cmd_resume() {
+    if [ -f "$PAUSE_FILE" ]; then
+        rm -f "$PAUSE_FILE"
+        echo -e "${GREEN}Daemon resumed.${NC} Audio correction is active again."
+    else
+        echo "Daemon is not paused."
+    fi
 }
 
 cmd_watch() {
@@ -371,6 +417,21 @@ cmd_doctor() {
         ISSUES=$((ISSUES + 1))
     fi
 
+    # Check pause state
+    echo -n "Checking pause state... "
+    if [ -f "$PAUSE_FILE" ]; then
+        PAUSE_UNTIL=$(cat "$PAUSE_FILE" 2>/dev/null)
+        if [ "$PAUSE_UNTIL" = "indefinite" ]; then
+            echo -e "${YELLOW}PAUSED indefinitely${NC} (run 'stickyaudio resume')"
+        elif [ -n "$PAUSE_UNTIL" ] && [ "$(date +%s)" -lt "$PAUSE_UNTIL" ] 2>/dev/null; then
+            echo -e "${YELLOW}PAUSED${NC} (timed)"
+        else
+            echo -e "${GREEN}Not paused${NC}"
+        fi
+    else
+        echo -e "${GREEN}Not paused${NC}"
+    fi
+
     echo ""
     if [ $ISSUES -eq 0 ]; then
         echo -e "${GREEN}All checks passed! stickyAudio is healthy.${NC}"
@@ -401,6 +462,8 @@ case "${1:-}" in
     history)  cmd_history ;;
     check)    cmd_check ;;
     switch)   cmd_switch ;;
+    pause)    cmd_pause "$2" ;;
+    resume)   cmd_resume ;;
     watch)    cmd_watch ;;
     doctor)   cmd_doctor ;;
     config)   cmd_config ;;

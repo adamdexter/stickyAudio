@@ -198,6 +198,23 @@ trim_log() {
     fi
 }
 
+is_paused() {
+    PAUSE_FILE="$SCRIPT_DIR/paused"
+    if [ ! -f "$PAUSE_FILE" ]; then
+        return 1  # not paused
+    fi
+    PAUSE_UNTIL=$(cat "$PAUSE_FILE" 2>/dev/null)
+    if [ "$PAUSE_UNTIL" = "indefinite" ]; then
+        return 0  # paused indefinitely
+    fi
+    if [ -n "$PAUSE_UNTIL" ] && [ "$(date +%s)" -lt "$PAUSE_UNTIL" ] 2>/dev/null; then
+        return 0  # paused with time remaining
+    fi
+    # Pause expired, clean up
+    rm -f "$PAUSE_FILE"
+    return 1  # not paused
+}
+
 load_config
 log "Daemon started (target: $DEVICE, builtin: $BUILTIN_SPEAKER, interval: ${POLL_INTERVAL}s)"
 
@@ -212,6 +229,12 @@ while true; do
         trim_log
     fi
 
+    # Skip correction if paused (via 'stickyaudio pause')
+    if is_paused; then
+        sleep "$POLL_INTERVAL"
+        continue
+    fi
+
     CURRENT=$("$SAS" -c -t output 2>/dev/null)
 
     # Log output changes for debugging
@@ -221,9 +244,10 @@ while true; do
     fi
 
     # Only correct if ALL of these are true:
-    # 1. Target device is available (headphones plugged in)
-    # 2. Current output is the built-in speaker (not AirPods or other BT)
-    # 3. Current output is not already the target device
+    # 1. Daemon is not paused
+    # 2. Target device is available (headphones plugged in)
+    # 3. Current output is the built-in speaker (not AirPods or other BT)
+    # 4. Current output is not already the target device
     if [ "$CURRENT" != "$DEVICE" ] && [ "$CURRENT" = "$BUILTIN_SPEAKER" ]; then
         if "$SAS" -a -t output 2>/dev/null | grep -q "$DEVICE"; then
             log "CORRECTED: '$CURRENT' → '$DEVICE' (headphones plugged in but output was on internal speaker)"

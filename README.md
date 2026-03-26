@@ -42,6 +42,9 @@ stickyaudio log -f      # Follow log in real-time
 stickyaudio history     # Show audio switch history with timestamps
 stickyaudio check       # Run a single daemon check manually
 stickyaudio switch      # Manually switch to the configured device
+stickyaudio pause       # Pause daemon indefinitely (use internal speaker freely)
+stickyaudio pause 30    # Pause daemon for 30 minutes
+stickyaudio resume      # Resume daemon after pausing
 stickyaudio watch       # Live-monitor audio output changes
 stickyaudio config      # Show current configuration
 ```
