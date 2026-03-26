@@ -89,6 +89,10 @@ launchctl load -w ~/Library/LaunchAgents/com.audio-wake-fix.daemon.plist
 
 ## Troubleshooting
 
+### Hotkey Pause/Resume
+
+If you want to toggle pause with a keyboard shortcut instead of the CLI, see [`hotkey-pause-scripts/`](hotkey-pause-scripts/) for ready-made integrations with macOS Shortcuts, Automator, and Alfred.
+
 ### Check if services are running:
 ```bash
 stickyaudio doctor
