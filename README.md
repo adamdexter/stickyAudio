@@ -15,7 +15,17 @@ Two layers of protection:
 
 ## Installation
 
+### One-liner (recommended)
+
 ```bash
+curl -fsSL https://raw.githubusercontent.com/adamdexter/stickyaudio/main/install-curl.sh | bash
+```
+
+### From source
+
+```bash
+git clone https://github.com/adamdexter/stickyaudio.git
+cd stickyaudio
 chmod +x install.sh
 ./install.sh
 ```
