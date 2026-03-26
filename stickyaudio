@@ -1,0 +1,478 @@
+#!/bin/bash
+
+# stickyaudio - CLI debug and management tool for stickyAudio v2.0
+# Usage: stickyaudio <command> [options]
+
+SCRIPT_DIR="$HOME/.config/audio-wake-fix"
+LOG_FILE="$SCRIPT_DIR/audio-wake.log"
+DAEMON_LOG="$SCRIPT_DIR/daemon.log"
+DAEMON_PID_FILE="$SCRIPT_DIR/daemon.pid"
+PAUSE_FILE="$SCRIPT_DIR/paused"
+PLIST_SLEEPWATCHER="$HOME/Library/LaunchAgents/com.audio-wake-fix.sleepwatcher.plist"
+PLIST_DAEMON="$HOME/Library/LaunchAgents/com.audio-wake-fix.daemon.plist"
+CONFIG_FILE="$SCRIPT_DIR/config"
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+SAS="/opt/homebrew/bin/SwitchAudioSource"
+
+# Load config
+load_config() {
+    if [ -f "$CONFIG_FILE" ]; then
+        source "$CONFIG_FILE"
+    fi
+    DEVICE="${DEVICE:-External Headphones}"
+}
+
+usage() {
+    echo "stickyaudio - Audio output management & debug tool"
+    echo ""
+    echo "Usage: stickyaudio <command>"
+    echo ""
+    echo "Commands:"
+    echo "  status      Show full system status (services, devices, current output)"
+    echo "  devices     List all audio output devices"
+    echo "  log         Show recent log entries (wake events + daemon activity)"
+    echo "  log -f      Follow log in real-time"
+    echo "  history     Show audio switch history with timestamps"
+    echo "  check       Run a single check (same as what the daemon does every 10s)"
+    echo "  switch      Manually switch to the configured headphone device"
+    echo "  watch       Live-monitor audio output changes in your terminal"
+    echo "  pause [min] Pause the daemon (default: indefinitely, or specify minutes)"
+    echo "  resume      Resume the daemon after pausing"
+    echo "  doctor      Run full diagnostic checks and report problems"
+    echo "  config      Show current configuration"
+    echo "  help        Show this help message"
+    echo ""
+}
+
+cmd_status() {
+    load_config
+    echo -e "${BLUE}=== stickyAudio Status ===${NC}"
+    echo ""
+
+    # Target device
+    echo -e "${BLUE}Target Device:${NC} $DEVICE"
+    echo ""
+
+    # Current audio output
+    if command -v "$SAS" &>/dev/null || command -v SwitchAudioSource &>/dev/null; then
+        CURRENT=$("$SAS" -c -t output 2>/dev/null || SwitchAudioSource -c -t output 2>/dev/null)
+        if [ "$CURRENT" = "$DEVICE" ]; then
+            echo -e "${GREEN}Current Output:${NC} $CURRENT ✓ (matches target)"
+        else
+            echo -e "${YELLOW}Current Output:${NC} $CURRENT ✗ (expected: $DEVICE)"
+        fi
+    else
+        echo -e "${RED}Current Output:${NC} SwitchAudioSource not found"
+    fi
+    echo ""
+
+    # Device availability
+    echo -e "${BLUE}Device Available:${NC}"
+    if "$SAS" -a -t output 2>/dev/null | grep -q "$DEVICE"; then
+        echo -e "  ${GREEN}✓${NC} '$DEVICE' is available (headphones plugged in)"
+    else
+        echo -e "  ${YELLOW}✗${NC} '$DEVICE' not found (nothing plugged into headphone jack?)"
+    fi
+    echo ""
+
+    # Pause status
+    echo -e "${BLUE}Daemon Paused:${NC}"
+    if [ -f "$PAUSE_FILE" ]; then
+        PAUSE_UNTIL=$(cat "$PAUSE_FILE" 2>/dev/null)
+        if [ "$PAUSE_UNTIL" = "indefinite" ]; then
+            echo -e "  ${YELLOW}PAUSED indefinitely${NC} (run 'stickyaudio resume' to unpause)"
+        elif [ -n "$PAUSE_UNTIL" ] && [ "$(date +%s)" -lt "$PAUSE_UNTIL" ] 2>/dev/null; then
+            REMAINING=$(( (PAUSE_UNTIL - $(date +%s)) / 60 ))
+            echo -e "  ${YELLOW}PAUSED${NC} (~${REMAINING}m remaining)"
+        else
+            echo -e "  ${GREEN}Not paused${NC} (pause file expired)"
+            rm -f "$PAUSE_FILE"
+        fi
+    else
+        echo -e "  ${GREEN}Not paused${NC}"
+    fi
+    echo ""
+
+    # Daemon status
+    echo -e "${BLUE}Services:${NC}"
+    if launchctl list 2>/dev/null | grep -q "com.audio-wake-fix.daemon"; then
+        echo -e "  ${GREEN}✓${NC} Polling daemon (com.audio-wake-fix.daemon)"
+    else
+        echo -e "  ${RED}✗${NC} Polling daemon (com.audio-wake-fix.daemon) - NOT RUNNING"
+    fi
+
+    if launchctl list 2>/dev/null | grep -q "com.audio-wake-fix.sleepwatcher"; then
+        echo -e "  ${GREEN}✓${NC} Sleepwatcher (com.audio-wake-fix.sleepwatcher)"
+    else
+        echo -e "  ${YELLOW}!${NC} Sleepwatcher (com.audio-wake-fix.sleepwatcher) - not running"
+    fi
+    echo ""
+
+    # Bluetooth devices
+    echo -e "${BLUE}Bluetooth Audio Devices:${NC}"
+    BT_DEVICES=$("$SAS" -a -t output 2>/dev/null | grep -v "MacBook\|Mac Mini\|Mac Pro\|Built-in\|External Headphones\|Headphones\|Line Out" || true)
+    if [ -n "$BT_DEVICES" ]; then
+        echo "$BT_DEVICES" | while read -r dev; do
+            echo -e "  ${YELLOW}→${NC} $dev"
+        done
+    else
+        echo "  (none connected)"
+    fi
+    echo ""
+
+    # Last log entries
+    echo -e "${BLUE}Recent Activity (last 5):${NC}"
+    if [ -f "$DAEMON_LOG" ]; then
+        tail -5 "$DAEMON_LOG" | while read -r line; do
+            echo "  $line"
+        done
+    elif [ -f "$LOG_FILE" ]; then
+        tail -5 "$LOG_FILE" | while read -r line; do
+            echo "  $line"
+        done
+    else
+        echo "  (no log file found)"
+    fi
+}
+
+cmd_devices() {
+    echo -e "${BLUE}=== Audio Output Devices ===${NC}"
+    echo ""
+    load_config
+    "$SAS" -a -t output 2>/dev/null | while read -r dev; do
+        CURRENT=$("$SAS" -c -t output 2>/dev/null)
+        if [ "$dev" = "$CURRENT" ] && [ "$dev" = "$DEVICE" ]; then
+            echo -e "  ${GREEN}▶ $dev${NC} (active, target)"
+        elif [ "$dev" = "$CURRENT" ]; then
+            echo -e "  ${YELLOW}▶ $dev${NC} (active)"
+        elif [ "$dev" = "$DEVICE" ]; then
+            echo -e "  ${BLUE}  $dev${NC} (target)"
+        else
+            echo "    $dev"
+        fi
+    done
+}
+
+cmd_log() {
+    if [ "$1" = "-f" ]; then
+        echo -e "${BLUE}Following daemon log (Ctrl+C to stop)...${NC}"
+        tail -f "$DAEMON_LOG" 2>/dev/null || tail -f "$LOG_FILE" 2>/dev/null || echo "No log file found"
+    else
+        LINES="${1:-30}"
+        echo -e "${BLUE}=== Recent Log (last $LINES lines) ===${NC}"
+        echo ""
+        if [ -f "$DAEMON_LOG" ]; then
+            echo -e "${BLUE}--- Daemon Log ---${NC}"
+            tail -"$LINES" "$DAEMON_LOG"
+        fi
+        if [ -f "$LOG_FILE" ]; then
+            echo ""
+            echo -e "${BLUE}--- Wake Log ---${NC}"
+            tail -"$LINES" "$LOG_FILE"
+        fi
+        if [ ! -f "$DAEMON_LOG" ] && [ ! -f "$LOG_FILE" ]; then
+            echo "No log files found. Is stickyAudio installed?"
+        fi
+    fi
+}
+
+cmd_history() {
+    echo -e "${BLUE}=== Audio Switch History ===${NC}"
+    echo ""
+    if [ -f "$DAEMON_LOG" ]; then
+        grep -E "(SWITCH|CORRECTED|switched|Switching)" "$DAEMON_LOG" 2>/dev/null | tail -20 | while read -r line; do
+            echo "  $line"
+        done
+    fi
+    if [ -f "$LOG_FILE" ]; then
+        grep -E "(switching|Current output)" "$LOG_FILE" 2>/dev/null | tail -20 | while read -r line; do
+            echo "  $line"
+        done
+    fi
+    COUNT_DAEMON=$(grep -c "CORRECTED" "$DAEMON_LOG" 2>/dev/null || echo 0)
+    COUNT_WAKE=$(grep -c "switching audio" "$LOG_FILE" 2>/dev/null || echo 0)
+    echo ""
+    echo -e "${BLUE}Total corrections:${NC} $COUNT_DAEMON (daemon) + $COUNT_WAKE (wake) = $((COUNT_DAEMON + COUNT_WAKE))"
+}
+
+cmd_check() {
+    load_config
+    echo -e "${BLUE}Running single check...${NC}"
+    echo ""
+
+    CURRENT=$("$SAS" -c -t output 2>/dev/null)
+    echo "  Current output: $CURRENT"
+    echo "  Target device:  $DEVICE"
+
+    if ! "$SAS" -a -t output 2>/dev/null | grep -q "$DEVICE"; then
+        echo -e "  ${YELLOW}Target device not available (not plugged in)${NC}"
+        echo "  → No action needed"
+        return
+    fi
+
+    echo -e "  Target device:  ${GREEN}available${NC}"
+
+    if [ "$CURRENT" = "$DEVICE" ]; then
+        echo -e "  ${GREEN}✓ Output is already correct. No action needed.${NC}"
+    else
+        echo -e "  ${YELLOW}✗ Output mismatch detected!${NC}"
+        echo "  → Would switch from '$CURRENT' to '$DEVICE'"
+        echo ""
+        read -r -p "  Switch now? [y/N] " confirm
+        if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
+            "$SAS" -s "$DEVICE" -t output
+            NEW=$("$SAS" -c -t output 2>/dev/null)
+            echo -e "  ${GREEN}Switched! Output is now: $NEW${NC}"
+        fi
+    fi
+}
+
+cmd_switch() {
+    load_config
+    echo "Switching to '$DEVICE'..."
+    "$SAS" -s "$DEVICE" -t output 2>/dev/null
+    CURRENT=$("$SAS" -c -t output 2>/dev/null)
+    echo -e "Current output: ${GREEN}$CURRENT${NC}"
+}
+
+cmd_pause() {
+    MINUTES="$1"
+    if [ -z "$MINUTES" ]; then
+        echo "indefinite" > "$PAUSE_FILE"
+        echo -e "${YELLOW}Daemon paused indefinitely.${NC}"
+        echo "The daemon will not correct audio output until you run:"
+        echo "  stickyaudio resume"
+    else
+        UNTIL=$(( $(date +%s) + MINUTES * 60 ))
+        echo "$UNTIL" > "$PAUSE_FILE"
+        echo -e "${YELLOW}Daemon paused for ${MINUTES} minutes.${NC}"
+        echo "It will automatically resume at $(date -r "$UNTIL" '+%H:%M:%S' 2>/dev/null || date -d "@$UNTIL" '+%H:%M:%S' 2>/dev/null)."
+        echo "Or run 'stickyaudio resume' to resume immediately."
+    fi
+}
+
+cmd_resume() {
+    if [ -f "$PAUSE_FILE" ]; then
+        rm -f "$PAUSE_FILE"
+        echo -e "${GREEN}Daemon resumed.${NC} Audio correction is active again."
+    else
+        echo "Daemon is not paused."
+    fi
+}
+
+cmd_watch() {
+    load_config
+    echo -e "${BLUE}Watching audio output changes (Ctrl+C to stop)...${NC}"
+    echo ""
+    LAST=""
+    while true; do
+        CURRENT=$("$SAS" -c -t output 2>/dev/null)
+        if [ "$CURRENT" != "$LAST" ]; then
+            TS=$(date '+%Y-%m-%d %H:%M:%S')
+            if [ "$CURRENT" = "$DEVICE" ]; then
+                echo -e "  ${GREEN}[$TS] Output: $CURRENT ✓${NC}"
+            else
+                echo -e "  ${YELLOW}[$TS] Output: $CURRENT ✗ (not target device)${NC}"
+            fi
+            LAST="$CURRENT"
+        fi
+        sleep 1
+    done
+}
+
+cmd_doctor() {
+    load_config
+    echo -e "${BLUE}=== stickyAudio Doctor ===${NC}"
+    echo ""
+    ISSUES=0
+
+    # Check SwitchAudioSource
+    echo -n "Checking SwitchAudioSource... "
+    if command -v "$SAS" &>/dev/null; then
+        echo -e "${GREEN}OK${NC}"
+    elif command -v SwitchAudioSource &>/dev/null; then
+        echo -e "${YELLOW}OK (non-standard path)${NC}"
+    else
+        echo -e "${RED}MISSING${NC} - run: brew install switchaudio-osx"
+        ISSUES=$((ISSUES + 1))
+    fi
+
+    # Check sleepwatcher
+    echo -n "Checking sleepwatcher... "
+    if command -v /opt/homebrew/sbin/sleepwatcher &>/dev/null; then
+        echo -e "${GREEN}OK${NC}"
+    elif command -v sleepwatcher &>/dev/null; then
+        echo -e "${YELLOW}OK (non-standard path)${NC}"
+    else
+        echo -e "${RED}MISSING${NC} - run: brew install sleepwatcher"
+        ISSUES=$((ISSUES + 1))
+    fi
+
+    # Check config directory
+    echo -n "Checking config directory... "
+    if [ -d "$SCRIPT_DIR" ]; then
+        echo -e "${GREEN}OK${NC} ($SCRIPT_DIR)"
+    else
+        echo -e "${RED}MISSING${NC} ($SCRIPT_DIR)"
+        ISSUES=$((ISSUES + 1))
+    fi
+
+    # Check config file
+    echo -n "Checking config file... "
+    if [ -f "$CONFIG_FILE" ]; then
+        echo -e "${GREEN}OK${NC} (device: $DEVICE)"
+    else
+        echo -e "${RED}MISSING${NC} ($CONFIG_FILE)"
+        ISSUES=$((ISSUES + 1))
+    fi
+
+    # Check daemon script
+    echo -n "Checking daemon script... "
+    if [ -x "$SCRIPT_DIR/stickyaudio-daemon.sh" ]; then
+        echo -e "${GREEN}OK${NC}"
+    else
+        echo -e "${RED}MISSING or not executable${NC}"
+        ISSUES=$((ISSUES + 1))
+    fi
+
+    # Check wake script
+    echo -n "Checking wake script... "
+    if [ -x "$SCRIPT_DIR/set-audio-output.sh" ]; then
+        echo -e "${GREEN}OK${NC}"
+    else
+        echo -e "${RED}MISSING or not executable${NC}"
+        ISSUES=$((ISSUES + 1))
+    fi
+
+    # Check ~/.wakeup symlink
+    echo -n "Checking ~/.wakeup symlink... "
+    if [ -L "$HOME/.wakeup" ]; then
+        TARGET=$(readlink "$HOME/.wakeup")
+        echo -e "${GREEN}OK${NC} (→ $TARGET)"
+    else
+        echo -e "${RED}MISSING${NC}"
+        ISSUES=$((ISSUES + 1))
+    fi
+
+    # Check daemon LaunchAgent
+    echo -n "Checking daemon LaunchAgent... "
+    if [ -f "$PLIST_DAEMON" ]; then
+        if launchctl list 2>/dev/null | grep -q "com.audio-wake-fix.daemon"; then
+            echo -e "${GREEN}OK${NC} (loaded and running)"
+        else
+            echo -e "${YELLOW}EXISTS but not loaded${NC}"
+            echo "         → Fix: launchctl load -w $PLIST_DAEMON"
+            ISSUES=$((ISSUES + 1))
+        fi
+    else
+        echo -e "${RED}MISSING${NC}"
+        ISSUES=$((ISSUES + 1))
+    fi
+
+    # Check sleepwatcher LaunchAgent
+    echo -n "Checking sleepwatcher LaunchAgent... "
+    if [ -f "$PLIST_SLEEPWATCHER" ]; then
+        if launchctl list 2>/dev/null | grep -q "com.audio-wake-fix.sleepwatcher"; then
+            echo -e "${GREEN}OK${NC} (loaded and running)"
+        else
+            echo -e "${YELLOW}EXISTS but not loaded${NC}"
+            echo "         → Fix: launchctl load -w $PLIST_SLEEPWATCHER"
+            ISSUES=$((ISSUES + 1))
+        fi
+    else
+        echo -e "${RED}MISSING${NC}"
+        ISSUES=$((ISSUES + 1))
+    fi
+
+    # Check target device availability
+    echo -n "Checking target device '$DEVICE'... "
+    if "$SAS" -a -t output 2>/dev/null | grep -q "$DEVICE"; then
+        echo -e "${GREEN}AVAILABLE${NC} (plugged in)"
+    else
+        echo -e "${YELLOW}NOT AVAILABLE${NC} (headphones not plugged in?)"
+    fi
+
+    # Check current output
+    echo -n "Checking current audio output... "
+    CURRENT=$("$SAS" -c -t output 2>/dev/null)
+    if [ "$CURRENT" = "$DEVICE" ]; then
+        echo -e "${GREEN}$CURRENT${NC} (correct)"
+    else
+        echo -e "${YELLOW}$CURRENT${NC} (expected: $DEVICE)"
+    fi
+
+    # Check log file writability
+    echo -n "Checking log files... "
+    if [ -w "$SCRIPT_DIR" ]; then
+        echo -e "${GREEN}OK${NC} (writable)"
+    else
+        echo -e "${RED}NOT WRITABLE${NC}"
+        ISSUES=$((ISSUES + 1))
+    fi
+
+    # Check pause state
+    echo -n "Checking pause state... "
+    if [ -f "$PAUSE_FILE" ]; then
+        PAUSE_UNTIL=$(cat "$PAUSE_FILE" 2>/dev/null)
+        if [ "$PAUSE_UNTIL" = "indefinite" ]; then
+            echo -e "${YELLOW}PAUSED indefinitely${NC} (run 'stickyaudio resume')"
+        elif [ -n "$PAUSE_UNTIL" ] && [ "$(date +%s)" -lt "$PAUSE_UNTIL" ] 2>/dev/null; then
+            echo -e "${YELLOW}PAUSED${NC} (timed)"
+        else
+            echo -e "${GREEN}Not paused${NC}"
+        fi
+    else
+        echo -e "${GREEN}Not paused${NC}"
+    fi
+
+    echo ""
+    if [ $ISSUES -eq 0 ]; then
+        echo -e "${GREEN}All checks passed! stickyAudio is healthy.${NC}"
+    else
+        echo -e "${YELLOW}Found $ISSUES issue(s). See above for fixes.${NC}"
+    fi
+}
+
+cmd_config() {
+    load_config
+    echo -e "${BLUE}=== Configuration ===${NC}"
+    echo ""
+    echo "Config file:      $CONFIG_FILE"
+    echo "Target device:    $DEVICE"
+    echo "Wake script:      $SCRIPT_DIR/set-audio-output.sh"
+    echo "Daemon script:    $SCRIPT_DIR/stickyaudio-daemon.sh"
+    echo "Wake log:         $LOG_FILE"
+    echo "Daemon log:       $DAEMON_LOG"
+    echo "Sleepwatcher:     $PLIST_SLEEPWATCHER"
+    echo "Daemon agent:     $PLIST_DAEMON"
+}
+
+# Main command dispatch
+case "${1:-}" in
+    status)   cmd_status ;;
+    devices)  cmd_devices ;;
+    log)      cmd_log "$2" ;;
+    history)  cmd_history ;;
+    check)    cmd_check ;;
+    switch)   cmd_switch ;;
+    pause)    cmd_pause "$2" ;;
+    resume)   cmd_resume ;;
+    watch)    cmd_watch ;;
+    doctor)   cmd_doctor ;;
+    config)   cmd_config ;;
+    help|--help|-h) usage ;;
+    "")       usage ;;
+    *)
+        echo "Unknown command: $1"
+        echo ""
+        usage
+        exit 1
+        ;;
+esac
