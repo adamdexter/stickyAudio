@@ -115,15 +115,15 @@ cmd_status() {
     fi
     echo ""
 
-    # Bluetooth devices
-    echo -e "${BLUE}Bluetooth Audio Devices:${NC}"
-    BT_DEVICES=$("$SAS" -a -t output 2>/dev/null | grep -v "MacBook\|Mac Mini\|Mac Pro\|Built-in\|External Headphones\|Headphones\|Line Out" || true)
-    if [ -n "$BT_DEVICES" ]; then
-        echo "$BT_DEVICES" | while read -r dev; do
+    # Other audio devices (virtual, Bluetooth, aggregate)
+    echo -e "${BLUE}Other Audio Devices:${NC}"
+    OTHER_DEVICES=$("$SAS" -a -t output 2>/dev/null | grep -iv "speakers\|External Headphones\|Headphones\|Built-in\|Line Out" || true)
+    if [ -n "$OTHER_DEVICES" ]; then
+        echo "$OTHER_DEVICES" | while read -r dev; do
             echo -e "  ${YELLOW}→${NC} $dev"
         done
     else
-        echo "  (none connected)"
+        echo "  (none)"
     fi
     echo ""
 
