@@ -1,14 +1,15 @@
-# Mac Mini Audio Wake Fix
+# stickyAudio
 
-Fixes the macOS bug where audio output defaults to the built-in speaker after waking from sleep, even when external speakers or headphones are connected to the 3.5mm audio jack.
+Keeps your Mac's audio output pinned to the headphone jack. Automatically corrects when macOS switches to the internal speaker after sleep/wake, Bluetooth disconnect, or coreaudiod restarts.
 
 ## How It Works
 
-1. **sleepwatcher** monitors system sleep/wake events
-2. When your Mac wakes, it triggers a script (`~/.wakeup`)
-3. The script checks to make sure an output device/3.5mm plug is occupying the headphone port.
-4. If something is plugged in, the script uses **SwitchAudioSource** to set audio output to your 3.5mm device
-5. A 2-second delay ensures the system is fully awake before switching
+Two layers of protection:
+
+1. **Sleepwatcher** - Immediately restores headphone output after sleep/wake events
+2. **Polling daemon** - Checks every 10 seconds for audio routing drift, catches Bluetooth disconnect fallback, coreaudiod restarts, and other edge cases
+
+**Smart Bluetooth handling:** The daemon only corrects when macOS falls back to the **internal speaker**. If you're actively using AirPods or other Bluetooth audio, it will **not** interrupt.
 
 ## Installation
 
@@ -19,55 +20,97 @@ chmod +x install.sh
 
 The installer will:
 - Install `switchaudio-osx` and `sleepwatcher` via Homebrew (if not present)
-- Auto-detect your 3.5mm audio device (or prompt you to select one)
-- Create the wake script and configure it to run automatically
+- Auto-detect your headphone device and built-in speaker names
+- Create and start both the wake script and polling daemon
+- Install the `stickyaudio` CLI tool
 
 ## Requirements
 
-- macOS (tested on Ventura/Sonoma on Apple Silicon Mac Mini)
+- macOS (tested on Ventura/Sonoma/Sequoia on Apple Silicon Mac Mini)
 - [Homebrew](https://brew.sh) package manager
 
-## Manual Configuration
+## CLI Debug Tool
 
-If you need to change the audio device after installation:
+After installation, the `stickyaudio` command is available in your terminal:
 
-1. List available devices:
-   ```bash
-   SwitchAudioSource -a -t output
-   ```
+```bash
+stickyaudio status      # Full system status (services, devices, current output)
+stickyaudio devices     # List all audio output devices
+stickyaudio doctor      # Run diagnostic checks and report problems
+stickyaudio log         # Show recent log entries
+stickyaudio log -f      # Follow log in real-time
+stickyaudio history     # Show audio switch history with timestamps
+stickyaudio check       # Run a single daemon check manually
+stickyaudio switch      # Manually switch to the configured device
+stickyaudio watch       # Live-monitor audio output changes
+stickyaudio config      # Show current configuration
+```
 
-2. Edit the script:
-   ```bash
-   nano ~/.config/audio-wake-fix/set-audio-output.sh
-   ```
+### Quick Diagnostics
 
-3. Change the `DEVICE=` line to match your desired output
+```bash
+# Is everything healthy?
+stickyaudio doctor
+
+# What's happening right now?
+stickyaudio status
+
+# Watch audio output in real-time (useful when debugging BT issues)
+stickyaudio watch
+
+# See when corrections happened
+stickyaudio history
+```
+
+## Configuration
+
+The config file is at `~/.config/audio-wake-fix/config`:
+
+```bash
+# Target audio output device (your headphone jack)
+DEVICE="External Headphones"
+
+# Built-in speaker name (what macOS falls back to)
+BUILTIN_SPEAKER="Mac Mini Speakers"
+
+# Polling interval in seconds
+POLL_INTERVAL=10
+```
+
+Edit this file to change settings, then restart the daemon:
+
+```bash
+launchctl unload ~/Library/LaunchAgents/com.audio-wake-fix.daemon.plist
+launchctl load -w ~/Library/LaunchAgents/com.audio-wake-fix.daemon.plist
+```
 
 ## Troubleshooting
 
-### Check if sleepwatcher is running:
+### Check if services are running:
 ```bash
-launchctl list | grep sleepwatcher
+stickyaudio doctor
 ```
 
-### View the log:
+### View live logs:
 ```bash
-cat ~/.config/audio-wake-fix/audio-wake.log
+stickyaudio log -f
 ```
 
 ### Manually test the switch:
 ```bash
-SwitchAudioSource -s "External Headphones" -t output
+stickyaudio check
 ```
 
-### Restart the service:
+### Restart all services:
 ```bash
 launchctl unload ~/Library/LaunchAgents/com.audio-wake-fix.sleepwatcher.plist
+launchctl unload ~/Library/LaunchAgents/com.audio-wake-fix.daemon.plist
 launchctl load -w ~/Library/LaunchAgents/com.audio-wake-fix.sleepwatcher.plist
+launchctl load -w ~/Library/LaunchAgents/com.audio-wake-fix.daemon.plist
 ```
 
 ### Intel Mac users:
-Change `/opt/homebrew/` paths to `/usr/local/` in the scripts.
+Change `/opt/homebrew/` paths to `/usr/local/` in the config and scripts.
 
 ## Uninstallation
 
@@ -80,18 +123,18 @@ chmod +x uninstall.sh
 
 | Path | Purpose |
 |------|---------|
-| `~/.config/audio-wake-fix/set-audio-output.sh` | The wake script |
-| `~/.config/audio-wake-fix/audio-wake.log` | Event log |
+| `~/.config/audio-wake-fix/config` | Configuration (device names, poll interval) |
+| `~/.config/audio-wake-fix/set-audio-output.sh` | Wake event handler |
+| `~/.config/audio-wake-fix/stickyaudio-daemon.sh` | Polling daemon |
+| `~/.config/audio-wake-fix/audio-wake.log` | Wake event log |
+| `~/.config/audio-wake-fix/daemon.log` | Daemon activity log |
 | `~/.wakeup` | Symlink to wake script (sleepwatcher convention) |
-| `~/Library/LaunchAgents/com.audio-wake-fix.sleepwatcher.plist` | Auto-start sleepwatcher |
-
-## Alternative: Using pmset (No Dependencies)
-
-If you prefer not to install additional tools, you can use a native approach with `pmset` notifications, but it's less reliable. The sleepwatcher method above is the most robust solution.
+| `~/Library/LaunchAgents/com.audio-wake-fix.sleepwatcher.plist` | Sleepwatcher LaunchAgent |
+| `~/Library/LaunchAgents/com.audio-wake-fix.daemon.plist` | Daemon LaunchAgent |
 
 ## Known Device Names
 
-Common 3.5mm audio device names on Mac Mini:
+Common headphone jack names on Mac Mini:
 - `External Headphones` (most common on Apple Silicon)
 - `Headphones`
 - `Built-in Output`
