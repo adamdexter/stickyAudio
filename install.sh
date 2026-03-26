@@ -64,12 +64,17 @@ echo "→ Using audio device: \"$AUDIO_DEVICE\""
 
 # Detect built-in speaker name (what macOS falls back to)
 BUILTIN_SPEAKER=""
-for name in "MacBook Pro Speakers" "MacBook Air Speakers" "Mac Mini Speakers" "Mac Pro Speakers" "Built-in Speaker" "Internal Speakers"; do
+for name in "MacBook Pro Speakers" "MacBook Air Speakers" "Mac Mini Speakers" "Mac mini Speakers" "Mac Pro Speakers" "Mac Studio Speakers" "Built-in Speaker" "Internal Speakers"; do
     if SwitchAudioSource -a -t output | grep -q "$name"; then
         BUILTIN_SPEAKER="$name"
         break
     fi
 done
+
+# Fallback: look for any device ending in "Speakers" (catches casing variants)
+if [ -z "$BUILTIN_SPEAKER" ]; then
+    BUILTIN_SPEAKER=$(SwitchAudioSource -a -t output | grep -i "speakers" | grep -iv "airpods\|bluetooth" | head -1)
+fi
 
 if [ -z "$BUILTIN_SPEAKER" ]; then
     echo ""
@@ -78,10 +83,12 @@ if [ -z "$BUILTIN_SPEAKER" ]; then
     echo "   corrects audio when macOS falls back to internal speakers"
     echo "   (it will NOT interrupt Bluetooth/AirPods)."
     echo ""
-    echo "   Please enter the built-in speaker name from the list above"
-    echo "   (or press Enter to use 'Mac Mini Speakers'):"
+    echo "   Please enter the built-in speaker name from the list above:"
     read -r BUILTIN_SPEAKER
-    BUILTIN_SPEAKER="${BUILTIN_SPEAKER:-Mac Mini Speakers}"
+    if [ -z "$BUILTIN_SPEAKER" ]; then
+        echo "   ❌ No speaker name provided. Cannot continue."
+        exit 1
+    fi
 fi
 
 echo "→ Built-in speaker detected as: \"$BUILTIN_SPEAKER\""
