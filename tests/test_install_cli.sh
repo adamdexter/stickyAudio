@@ -87,6 +87,29 @@ else
     fail_test "CLI no longer runnable after source dir was removed"
 fi
 
+# ── Test 2c: dangling symlink at destination (reporter's machine state) ───
+# A user hit by the v2.0 install-curl bug has /opt/homebrew/bin/stickyaudio
+# pointing into a tmpdir that's already been deleted. Re-running the
+# installer must overwrite that dangling symlink, not fail because cp/curl
+# can't follow it.
+DANGLING_TARGET="$INSTALL_DIR/stickyaudio"
+ln -sf "/tmp/this-tmpdir-was-already-deleted/stickyaudio" "$DANGLING_TARGET"
+
+# Curl-pipe path (no source file → remote download must overwrite dangler)
+output="$(run_cli_block "$ELSEWHERE_DIR" "$INSTALL_DIR")"
+
+start_test "dangling-symlink: install succeeds via download path"
+assert_contains "$output" "(downloaded)"
+
+start_test "dangling-symlink: target is now a real file, not a dangler"
+if [ -L "$DANGLING_TARGET" ]; then
+    fail_test "still a symlink"
+elif [ ! -f "$DANGLING_TARGET" ]; then
+    fail_test "target missing"
+else
+    pass_test
+fi
+
 # ── Test 3: both paths fail (loud-error guarantee) ────────────────────────
 # Clear the install dir and make it read-only. Both symlink and download
 # must fail; the script must print the manual recovery command.

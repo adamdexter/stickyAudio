@@ -358,6 +358,11 @@ CLI_INSTALLED=0
 # - Anything else (e.g. extracted tarball from install-curl.sh): copy,
 #   because the source dir is likely cleaned up after install-curl.sh exits
 #   and a symlink into it would dangle.
+# Clear any stale or dangling symlink at the target (e.g. left over from
+# a prior failed install). Both cp and curl -o follow symlinks at the
+# destination and fail if the target's parent directory has been deleted.
+rm -f "$CLI_TARGET" 2>/dev/null
+
 if [ -f "$SCRIPT_SOURCE" ]; then
     chmod +x "$SCRIPT_SOURCE"
     if [ -d "$SCRIPT_DIR_PATH/.git" ]; then
@@ -376,6 +381,7 @@ fi
 # Fall back to downloading from GitHub (covers `curl ... | bash` installs
 # that pipe install.sh directly without an unpacked source tree).
 if [ "$CLI_INSTALLED" -eq 0 ]; then
+    rm -f "$CLI_TARGET" 2>/dev/null
     if curl -fsSL "$CLI_REMOTE_URL" -o "$CLI_TARGET" 2>/dev/null && chmod +x "$CLI_TARGET" 2>/dev/null; then
         echo "✓ Installed 'stickyaudio' CLI to $CLI_TARGET (downloaded)"
         CLI_INSTALLED=1
