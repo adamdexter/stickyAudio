@@ -339,21 +339,59 @@ launchctl load -w "$LAUNCH_AGENTS_DIR/com.audio-wake-fix.daemon.plist"
 echo "✓ Loaded daemon LaunchAgent"
 
 # Install the CLI tool
-CLI_INSTALL_DIR="/usr/local/bin"
-if [ -d "/opt/homebrew/bin" ]; then
-    CLI_INSTALL_DIR="/opt/homebrew/bin"
-fi
-
-SCRIPT_SOURCE="$(cd "$(dirname "$0")" && pwd)/stickyaudio"
-if [ -f "$SCRIPT_SOURCE" ]; then
-    chmod +x "$SCRIPT_SOURCE"
-    if ln -sf "$SCRIPT_SOURCE" "$CLI_INSTALL_DIR/stickyaudio" 2>/dev/null; then
-        echo "✓ Installed 'stickyaudio' CLI to $CLI_INSTALL_DIR/stickyaudio"
-    else
-        echo "→ Could not symlink to $CLI_INSTALL_DIR (try: sudo ln -sf $SCRIPT_SOURCE $CLI_INSTALL_DIR/stickyaudio)"
-        echo "  You can still run it directly: ./stickyaudio"
+# CLI_INSTALL_BLOCK_START
+if [ -z "${CLI_INSTALL_DIR:-}" ]; then
+    CLI_INSTALL_DIR="/usr/local/bin"
+    if [ -d "/opt/homebrew/bin" ]; then
+        CLI_INSTALL_DIR="/opt/homebrew/bin"
     fi
 fi
+CLI_TARGET="$CLI_INSTALL_DIR/stickyaudio"
+CLI_REMOTE_URL="https://raw.githubusercontent.com/adamdexter/stickyAudio/main/stickyaudio"
+
+SCRIPT_DIR_PATH="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+SCRIPT_SOURCE="$SCRIPT_DIR_PATH/stickyaudio"
+CLI_INSTALLED=0
+
+# If the source file exists locally, decide between symlink and copy.
+# - Git checkout (.git/ present): symlink so `git pull` updates the CLI.
+# - Anything else (e.g. extracted tarball from install-curl.sh): copy,
+#   because the source dir is likely cleaned up after install-curl.sh exits
+#   and a symlink into it would dangle.
+if [ -f "$SCRIPT_SOURCE" ]; then
+    chmod +x "$SCRIPT_SOURCE"
+    if [ -d "$SCRIPT_DIR_PATH/.git" ]; then
+        if ln -sf "$SCRIPT_SOURCE" "$CLI_TARGET" 2>/dev/null; then
+            echo "✓ Installed 'stickyaudio' CLI to $CLI_TARGET (symlinked from checkout)"
+            CLI_INSTALLED=1
+        fi
+    else
+        if cp "$SCRIPT_SOURCE" "$CLI_TARGET" 2>/dev/null && chmod +x "$CLI_TARGET" 2>/dev/null; then
+            echo "✓ Installed 'stickyaudio' CLI to $CLI_TARGET (copied)"
+            CLI_INSTALLED=1
+        fi
+    fi
+fi
+
+# Fall back to downloading from GitHub (covers `curl ... | bash` installs
+# that pipe install.sh directly without an unpacked source tree).
+if [ "$CLI_INSTALLED" -eq 0 ]; then
+    if curl -fsSL "$CLI_REMOTE_URL" -o "$CLI_TARGET" 2>/dev/null && chmod +x "$CLI_TARGET" 2>/dev/null; then
+        echo "✓ Installed 'stickyaudio' CLI to $CLI_TARGET (downloaded)"
+        CLI_INSTALLED=1
+    fi
+fi
+
+if [ "$CLI_INSTALLED" -eq 0 ]; then
+    echo ""
+    echo "❌ Could not install the 'stickyaudio' CLI to $CLI_TARGET."
+    echo "   The daemon is running, but the 'stickyaudio' command won't be available."
+    echo ""
+    echo "   Install it manually:"
+    echo "     sudo curl -fsSL $CLI_REMOTE_URL \\"
+    echo "       -o $CLI_TARGET && sudo chmod +x $CLI_TARGET"
+fi
+# CLI_INSTALL_BLOCK_END
 
 echo ""
 echo "=========================================="

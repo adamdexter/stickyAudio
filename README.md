@@ -193,6 +193,9 @@ Common headphone jack names on Mac Mini:
 
 ## Changelog
 
+### v2.0.1
+- **Fix `command not found: stickyaudio` after curl-script install** — `install-curl.sh` extracted the repo to a temp dir, and the installer symlinked the CLI into that dir. When the temp dir was cleaned up, the symlink dangled and the command vanished. The installer now copies the CLI when run from a tarball, symlinks only when run from a git checkout, and falls back to downloading the CLI from GitHub when piped directly to bash.
+
 ### v2.0
 - **Polling daemon** — Checks audio routing every 10 seconds, catching Bluetooth disconnect fallback, coreaudiod restarts, and other events that sleepwatcher misses
 - **Smart Bluetooth awareness** — Daemon only corrects when output falls back to the internal speaker; never interrupts AirPods or other Bluetooth devices
