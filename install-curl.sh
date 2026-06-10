@@ -22,6 +22,18 @@ curl -fsSL "https://github.com/$REPO/archive/refs/heads/$BRANCH.tar.gz" | tar -x
 # The extracted folder is named stickyaudio-main
 cd "$TMPDIR/stickyaudio-$BRANCH"
 
-# Run the real installer
+# Run the real installer.
+#
+# When invoked as `curl ... | bash`, stdin is the curl pipe — which is
+# already at EOF by the time install.sh reaches its `read` prompts. Without
+# a redirect, `read` returns immediately and the user's typed answer goes
+# to the surrounding shell (often producing a confusing parser error from
+# zsh). Reattach stdin to the controlling terminal so interactive prompts
+# actually reach the user. Fall back to inherited stdin when no tty is
+# available (e.g. an unattended CI run that pre-detects the device).
 chmod +x install.sh
-./install.sh
+if [ -e /dev/tty ]; then
+    ./install.sh < /dev/tty
+else
+    ./install.sh
+fi

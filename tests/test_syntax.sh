@@ -13,6 +13,7 @@ echo "test_syntax.sh"
 # Every shell script we ship — extend this list when new ones land.
 SCRIPTS=(
     "$REPO_ROOT/install.sh"
+    "$REPO_ROOT/install-curl.sh"
     "$REPO_ROOT/uninstall.sh"
     "$REPO_ROOT/stickyaudio"
     "$REPO_ROOT/hotkey-pause-scripts/stickyaudio-toggle.sh"
