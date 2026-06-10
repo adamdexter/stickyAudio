@@ -19,7 +19,15 @@ YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-SAS="/opt/homebrew/bin/SwitchAudioSource"
+# Probe Homebrew locations for both Apple Silicon (/opt/homebrew) and
+# Intel (/usr/local); fall back to PATH lookup.
+SAS="SwitchAudioSource"
+for p in /opt/homebrew/bin/SwitchAudioSource /usr/local/bin/SwitchAudioSource; do
+    if [ -x "$p" ]; then
+        SAS="$p"
+        break
+    fi
+done
 
 # Load config
 load_config() {
@@ -75,7 +83,7 @@ cmd_status() {
 
     # Device availability
     echo -e "${BLUE}Device Available:${NC}"
-    if "$SAS" -a -t output 2>/dev/null | grep -q "$DEVICE"; then
+    if "$SAS" -a -t output 2>/dev/null | grep -qxF "$DEVICE"; then
         echo -e "  ${GREEN}✓${NC} '$DEVICE' is available (headphones plugged in)"
     else
         echo -e "  ${YELLOW}✗${NC} '$DEVICE' not found (nothing plugged into headphone jack?)"
@@ -161,11 +169,17 @@ cmd_devices() {
 }
 
 cmd_log() {
-    if [ "$1" = "-f" ]; then
+    if [ "${1:-}" = "-f" ]; then
         echo -e "${BLUE}Following daemon log (Ctrl+C to stop)...${NC}"
         tail -f "$DAEMON_LOG" 2>/dev/null || tail -f "$LOG_FILE" 2>/dev/null || echo "No log file found"
     else
         LINES="${1:-30}"
+        case "$LINES" in
+            *[!0-9]*|"")
+                echo "Invalid line count: '$LINES' (expected a number or -f)"
+                exit 1
+                ;;
+        esac
         echo -e "${BLUE}=== Recent Log (last $LINES lines) ===${NC}"
         echo ""
         if [ -f "$DAEMON_LOG" ]; then
@@ -196,8 +210,12 @@ cmd_history() {
             echo "  $line"
         done
     fi
-    COUNT_DAEMON=$(grep -c "CORRECTED" "$DAEMON_LOG" 2>/dev/null || echo 0)
-    COUNT_WAKE=$(grep -c "switching audio" "$LOG_FILE" 2>/dev/null || echo 0)
+    # `|| echo 0` would be wrong here: grep -c already prints 0 when the file
+    # has no matches (exiting 1), which would yield "0\n0" and break the math.
+    COUNT_DAEMON=$(grep -c "CORRECTED" "$DAEMON_LOG" 2>/dev/null || true)
+    COUNT_DAEMON=${COUNT_DAEMON:-0}
+    COUNT_WAKE=$(grep -c "switching audio" "$LOG_FILE" 2>/dev/null || true)
+    COUNT_WAKE=${COUNT_WAKE:-0}
     echo ""
     echo -e "${BLUE}Total corrections:${NC} $COUNT_DAEMON (daemon) + $COUNT_WAKE (wake) = $((COUNT_DAEMON + COUNT_WAKE))"
 }
@@ -211,7 +229,7 @@ cmd_check() {
     echo "  Current output: $CURRENT"
     echo "  Target device:  $DEVICE"
 
-    if ! "$SAS" -a -t output 2>/dev/null | grep -q "$DEVICE"; then
+    if ! "$SAS" -a -t output 2>/dev/null | grep -qxF "$DEVICE"; then
         echo -e "  ${YELLOW}Target device not available (not plugged in)${NC}"
         echo "  → No action needed"
         return
@@ -236,14 +254,32 @@ cmd_check() {
 
 cmd_switch() {
     load_config
+    if ! "$SAS" -a -t output 2>/dev/null | grep -qxF "$DEVICE"; then
+        echo -e "${YELLOW}'$DEVICE' is not available${NC} (headphones not plugged in?)"
+        exit 1
+    fi
     echo "Switching to '$DEVICE'..."
     "$SAS" -s "$DEVICE" -t output 2>/dev/null
     CURRENT=$("$SAS" -c -t output 2>/dev/null)
-    echo -e "Current output: ${GREEN}$CURRENT${NC}"
+    if [ "$CURRENT" = "$DEVICE" ]; then
+        echo -e "Current output: ${GREEN}$CURRENT${NC}"
+    else
+        echo -e "${RED}Switch failed.${NC} Current output: $CURRENT"
+        exit 1
+    fi
 }
 
 cmd_pause() {
-    MINUTES="$1"
+    MINUTES="${1:-}"
+    if [ -n "$MINUTES" ]; then
+        case "$MINUTES" in
+            *[!0-9]*)
+                echo "Invalid minutes: '$MINUTES' (expected a whole number)"
+                exit 1
+                ;;
+        esac
+    fi
+    mkdir -p "$SCRIPT_DIR"
     if [ -z "$MINUTES" ]; then
         echo "indefinite" > "$PAUSE_FILE"
         echo -e "${YELLOW}Daemon paused indefinitely.${NC}"
@@ -306,7 +342,7 @@ cmd_doctor() {
 
     # Check sleepwatcher
     echo -n "Checking sleepwatcher... "
-    if command -v /opt/homebrew/sbin/sleepwatcher &>/dev/null; then
+    if [ -x /opt/homebrew/sbin/sleepwatcher ] || [ -x /usr/local/sbin/sleepwatcher ]; then
         echo -e "${GREEN}OK${NC}"
     elif command -v sleepwatcher &>/dev/null; then
         echo -e "${YELLOW}OK (non-standard path)${NC}"
@@ -393,7 +429,7 @@ cmd_doctor() {
 
     # Check target device availability
     echo -n "Checking target device '$DEVICE'... "
-    if "$SAS" -a -t output 2>/dev/null | grep -q "$DEVICE"; then
+    if "$SAS" -a -t output 2>/dev/null | grep -qxF "$DEVICE"; then
         echo -e "${GREEN}AVAILABLE${NC} (plugged in)"
     else
         echo -e "${YELLOW}NOT AVAILABLE${NC} (headphones not plugged in?)"
@@ -458,11 +494,11 @@ cmd_config() {
 case "${1:-}" in
     status)   cmd_status ;;
     devices)  cmd_devices ;;
-    log)      cmd_log "$2" ;;
+    log)      cmd_log "${2:-}" ;;
     history)  cmd_history ;;
     check)    cmd_check ;;
     switch)   cmd_switch ;;
-    pause)    cmd_pause "$2" ;;
+    pause)    cmd_pause "${2:-}" ;;
     resume)   cmd_resume ;;
     watch)    cmd_watch ;;
     doctor)   cmd_doctor ;;

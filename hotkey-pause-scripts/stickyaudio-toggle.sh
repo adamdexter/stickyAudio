@@ -11,6 +11,7 @@ if [ -f "$PAUSE_FILE" ]; then
     rm -f "$PAUSE_FILE"
     echo "stickyAudio Resumed"
 else
+    mkdir -p "$(dirname "$PAUSE_FILE")"
     echo "indefinite" > "$PAUSE_FILE"
     echo "stickyAudio Paused"
 fi

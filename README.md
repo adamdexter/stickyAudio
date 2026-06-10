@@ -160,7 +160,7 @@ launchctl load -w ~/Library/LaunchAgents/com.audio-wake-fix.daemon.plist
 ```
 
 ### Intel Mac users:
-Change `/opt/homebrew/` paths to `/usr/local/` in the config and scripts.
+As of v2.0.2, all scripts auto-detect the Homebrew prefix (`/opt/homebrew` on Apple Silicon, `/usr/local` on Intel) — no manual path editing needed. If you installed an earlier version, re-run the installer.
 
 ## Uninstallation
 
@@ -192,6 +192,15 @@ Common headphone jack names on Mac Mini:
 - `Line Out`
 
 ## Changelog
+
+### v2.0.2
+- **Fix curl-pipe install prompt swallowed by closed stdin** — `curl ... | bash` left install.sh reading from the exhausted curl pipe, so the device-name prompt EOF'd instantly, the installer exited silently, and the user's typed answer leaked to their shell. install-curl.sh now reattaches stdin to `/dev/tty`.
+- **Intel Mac support** — the daemon, wake script, CLI, and sleepwatcher LaunchAgent hardcoded Apple Silicon Homebrew paths (`/opt/homebrew`). All now probe both prefixes and fall back to PATH.
+- **Exact device-name matching** — availability checks used substring/regex grep, so e.g. `LG TV SSCR2` matched the `LG TV SSCR2 (eqMac)` line. All device checks now use exact whole-line fixed-string matching.
+- **Config hardening** — device names are escaped before being written to the sourced config file, so names containing `$`, backticks, or quotes can't execute as shell.
+- **Installer robustness** — empty input at the device prompt now fails loudly instead of dying silently under `set -e`; a typed name that doesn't match any listed device prints a warning; sleepwatcher detection checks Homebrew's sbin paths (no more spurious reinstall).
+- **Uninstaller** — also removes the CLI when it's a copied file (tarball/curl installs), not just a symlink.
+- **CLI fixes** — `pause`/`log` validate numeric arguments; `pause` works before first daemon run; `switch` errors clearly when the device is unplugged and verifies the switch took effect; `history` correction counts no longer break when a log has zero matches.
 
 ### v2.0.1
 - **Fix `command not found: stickyaudio` after curl-script install** — `install-curl.sh` extracted the repo to a temp dir, and the installer symlinked the CLI into that dir. When the temp dir was cleaned up, the symlink dangled and the command vanished. The installer now copies the CLI when run from a tarball, symlinks only when run from a git checkout, and falls back to downloading the CLI from GitHub when piped directly to bash.

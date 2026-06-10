@@ -29,10 +29,28 @@ else
     echo "✓ SwitchAudioSource already installed"
 fi
 
-# Install sleepwatcher if not present
-if ! command -v sleepwatcher &> /dev/null; then
+# Locate sleepwatcher — Homebrew puts it in sbin, which is often not on
+# PATH, so check the known locations for both Apple Silicon and Intel.
+find_sleepwatcher() {
+    local p
+    for p in /opt/homebrew/sbin/sleepwatcher /usr/local/sbin/sleepwatcher; do
+        if [ -x "$p" ]; then
+            printf '%s' "$p"
+            return 0
+        fi
+    done
+    command -v sleepwatcher 2>/dev/null
+}
+
+SLEEPWATCHER_BIN="$(find_sleepwatcher || true)"
+if [ -z "$SLEEPWATCHER_BIN" ]; then
     echo "→ Installing sleepwatcher..."
     brew install sleepwatcher
+    SLEEPWATCHER_BIN="$(find_sleepwatcher || true)"
+    if [ -z "$SLEEPWATCHER_BIN" ]; then
+        echo "❌ sleepwatcher was installed but could not be located."
+        exit 1
+    fi
 else
     echo "✓ sleepwatcher already installed"
 fi
@@ -45,10 +63,13 @@ echo "=========================================="
 SwitchAudioSource -a -t output
 echo ""
 
-# Detect the 3.5mm jack device name (common names)
+# Detect the 3.5mm jack device name (common names).
+# -x -F: exact whole-line, fixed-string match — substring matching is wrong
+# here because device names can contain each other (e.g. "LG TV SSCR2" vs
+# "LG TV SSCR2 (eqMac)") and regex metacharacters.
 AUDIO_DEVICE=""
 for name in "External Headphones" "Headphones" "Built-in Output" "Line Out"; do
-    if SwitchAudioSource -a -t output | grep -q "$name"; then
+    if SwitchAudioSource -a -t output | grep -qxF "$name"; then
         AUDIO_DEVICE="$name"
         break
     fi
@@ -57,7 +78,18 @@ done
 if [ -z "$AUDIO_DEVICE" ]; then
     echo "⚠️  Could not auto-detect 3.5mm audio device."
     echo "   Please enter the exact name from the list above:"
-    read -r AUDIO_DEVICE
+    # `|| true`: under `set -e` a failed read (EOF on stdin) would otherwise
+    # kill the installer silently — fall through to the loud error below.
+    read -r AUDIO_DEVICE || true
+    if [ -z "$AUDIO_DEVICE" ]; then
+        echo "❌ No device name provided. Cannot continue."
+        exit 1
+    fi
+    if ! SwitchAudioSource -a -t output | grep -qxF "$AUDIO_DEVICE"; then
+        echo "⚠️  Warning: \"$AUDIO_DEVICE\" does not exactly match any device"
+        echo "   in the list above. Continuing anyway — double-check with"
+        echo "   'stickyaudio devices' after install."
+    fi
 fi
 
 echo "→ Using audio device: \"$AUDIO_DEVICE\""
@@ -65,7 +97,7 @@ echo "→ Using audio device: \"$AUDIO_DEVICE\""
 # Detect built-in speaker name (what macOS falls back to)
 BUILTIN_SPEAKER=""
 for name in "MacBook Pro Speakers" "MacBook Air Speakers" "Mac Mini Speakers" "Mac mini Speakers" "Mac Pro Speakers" "Mac Studio Speakers" "Built-in Speaker" "Internal Speakers"; do
-    if SwitchAudioSource -a -t output | grep -q "$name"; then
+    if SwitchAudioSource -a -t output | grep -qxF "$name"; then
         BUILTIN_SPEAKER="$name"
         break
     fi
@@ -84,7 +116,7 @@ if [ -z "$BUILTIN_SPEAKER" ]; then
     echo "   (it will NOT interrupt Bluetooth/AirPods)."
     echo ""
     echo "   Please enter the built-in speaker name from the list above:"
-    read -r BUILTIN_SPEAKER
+    read -r BUILTIN_SPEAKER || true
     if [ -z "$BUILTIN_SPEAKER" ]; then
         echo "   ❌ No speaker name provided. Cannot continue."
         exit 1
@@ -97,6 +129,14 @@ echo "→ Built-in speaker detected as: \"$BUILTIN_SPEAKER\""
 SCRIPT_DIR="$HOME/.config/audio-wake-fix"
 mkdir -p "$SCRIPT_DIR"
 
+# The config file is `source`d by the daemon, wake script, and CLI, so a
+# device name containing \ " $ or ` would otherwise be executed as shell.
+escape_for_config() {
+    printf '%s' "$1" | sed -e 's/[\\"$`]/\\&/g'
+}
+AUDIO_DEVICE_ESC="$(escape_for_config "$AUDIO_DEVICE")"
+BUILTIN_SPEAKER_ESC="$(escape_for_config "$BUILTIN_SPEAKER")"
+
 # Write config file (used by both daemon and CLI)
 cat > "$SCRIPT_DIR/config" << EOF
 # stickyAudio configuration
@@ -105,12 +145,12 @@ cat > "$SCRIPT_DIR/config" << EOF
 #   launchctl load -w ~/Library/LaunchAgents/com.audio-wake-fix.daemon.plist
 
 # Target audio output device (your headphone jack)
-DEVICE="$AUDIO_DEVICE"
+DEVICE="$AUDIO_DEVICE_ESC"
 
 # Built-in speaker name (what macOS falls back to when BT disconnects)
 # The daemon ONLY corrects when output is this device.
 # This means AirPods/Bluetooth won't be interrupted.
-BUILTIN_SPEAKER="$BUILTIN_SPEAKER"
+BUILTIN_SPEAKER="$BUILTIN_SPEAKER_ESC"
 
 # Polling interval in seconds (how often the daemon checks)
 POLL_INTERVAL=10
@@ -127,7 +167,16 @@ cat > "$SCRIPT_DIR/set-audio-output.sh" << 'WAKE_EOF'
 SCRIPT_DIR="$HOME/.config/audio-wake-fix"
 LOG_FILE="$SCRIPT_DIR/audio-wake.log"
 CONFIG_FILE="$SCRIPT_DIR/config"
-SAS="/opt/homebrew/bin/SwitchAudioSource"
+
+# launchd runs this with a minimal PATH, so probe the Homebrew locations
+# for both Apple Silicon (/opt/homebrew) and Intel (/usr/local) explicitly.
+SAS="SwitchAudioSource"
+for p in /opt/homebrew/bin/SwitchAudioSource /usr/local/bin/SwitchAudioSource; do
+    if [ -x "$p" ]; then
+        SAS="$p"
+        break
+    fi
+done
 
 # Load config
 if [ -f "$CONFIG_FILE" ]; then
@@ -145,7 +194,7 @@ log() {
 log "System woke from sleep"
 
 # Check if the headphone device is available (i.e., something is plugged in)
-if "$SAS" -a -t output | grep -q "$DEVICE"; then
+if "$SAS" -a -t output | grep -qxF "$DEVICE"; then
     CURRENT=$("$SAS" -c -t output)
     log "Device '$DEVICE' available. Current output: $CURRENT"
 
@@ -183,7 +232,16 @@ cat > "$SCRIPT_DIR/stickyaudio-daemon.sh" << 'DAEMON_EOF'
 SCRIPT_DIR="$HOME/.config/audio-wake-fix"
 LOG_FILE="$SCRIPT_DIR/daemon.log"
 CONFIG_FILE="$SCRIPT_DIR/config"
-SAS="/opt/homebrew/bin/SwitchAudioSource"
+
+# launchd runs this with a minimal PATH, so probe the Homebrew locations
+# for both Apple Silicon (/opt/homebrew) and Intel (/usr/local) explicitly.
+SAS="SwitchAudioSource"
+for p in /opt/homebrew/bin/SwitchAudioSource /usr/local/bin/SwitchAudioSource; do
+    if [ -x "$p" ]; then
+        SAS="$p"
+        break
+    fi
+done
 
 # Load config
 load_config() {
@@ -256,7 +314,7 @@ while true; do
     # 3. Current output is the built-in speaker (not AirPods or other BT)
     # 4. Current output is not already the target device
     if [ "$CURRENT" != "$DEVICE" ] && [ "$CURRENT" = "$BUILTIN_SPEAKER" ]; then
-        if "$SAS" -a -t output 2>/dev/null | grep -q "$DEVICE"; then
+        if "$SAS" -a -t output 2>/dev/null | grep -qxF "$DEVICE"; then
             log "CORRECTED: '$CURRENT' → '$DEVICE' (headphones plugged in but output was on internal speaker)"
             "$SAS" -s "$DEVICE" -t output 2>> "$LOG_FILE"
             LAST_OUTPUT="$DEVICE"
@@ -287,7 +345,7 @@ cat > "$LAUNCH_AGENTS_DIR/com.audio-wake-fix.sleepwatcher.plist" << EOF
     <string>com.audio-wake-fix.sleepwatcher</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/opt/homebrew/sbin/sleepwatcher</string>
+        <string>$SLEEPWATCHER_BIN</string>
         <string>-V</string>
         <string>-w</string>
         <string>$HOME/.wakeup</string>

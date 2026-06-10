@@ -31,9 +31,10 @@ if [ -L "$HOME/.wakeup" ]; then
     echo "✓ Removed ~/.wakeup"
 fi
 
-# Remove CLI symlink
+# Remove the CLI — may be a symlink (git-checkout install) or a regular
+# file (tarball/curl install copies it).
 for dir in /opt/homebrew/bin /usr/local/bin; do
-    if [ -L "$dir/stickyaudio" ]; then
+    if [ -L "$dir/stickyaudio" ] || [ -f "$dir/stickyaudio" ]; then
         rm "$dir/stickyaudio" 2>/dev/null || sudo rm "$dir/stickyaudio" 2>/dev/null || true
         echo "✓ Removed $dir/stickyaudio"
     fi

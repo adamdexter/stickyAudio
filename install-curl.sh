@@ -7,20 +7,23 @@ set -e
 
 REPO="adamdexter/stickyaudio"
 BRANCH="main"
-TMPDIR=$(mktemp -d)
+# Not named TMPDIR: that env var is commonly exported on macOS, and
+# overwriting it would leak our (soon-deleted) directory to child
+# processes like brew.
+WORKDIR=$(mktemp -d)
 
 cleanup() {
-    rm -rf "$TMPDIR"
+    rm -rf "$WORKDIR"
 }
 trap cleanup EXIT
 
 echo "Downloading stickyAudio..."
 
 # Download and extract the repo
-curl -fsSL "https://github.com/$REPO/archive/refs/heads/$BRANCH.tar.gz" | tar -xz -C "$TMPDIR"
+curl -fsSL "https://github.com/$REPO/archive/refs/heads/$BRANCH.tar.gz" | tar -xz -C "$WORKDIR"
 
 # The extracted folder is named stickyaudio-main
-cd "$TMPDIR/stickyaudio-$BRANCH"
+cd "$WORKDIR/stickyaudio-$BRANCH"
 
 # Run the real installer.
 #
