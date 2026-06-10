@@ -83,6 +83,17 @@ shell** — see the escaping rule below.
 - When fixing a bug, first confirm the new test fails on the pre-fix code
   (e.g. `git stash` the fix, run the test, unstash).
 
+## Issue automation
+
+An hourly Claude routine ("stickyAudio issue triage & auto-fix", managed at
+claude.ai/code/routines) auto-triages open GitHub issues: it diagnoses bugs,
+writes a regression test, fixes, and replies to the poster. The
+`claude-auto` label marks issues it has already handled — don't re-triage
+those, and apply the label if you handle an issue manually. Push policy:
+direct to main only when the full test suite is green and the diff is small
+(≲50 lines, shell/docs only); otherwise a `claude/issue-<n>-*` branch + PR.
+It never closes issues and never touches `.github/workflows/`.
+
 ## Known design decisions
 
 - Wake script switching away from Bluetooth on wake is intentional (differs
