@@ -125,6 +125,11 @@ BUILTIN_SPEAKER="Mac Mini Speakers"
 
 # Polling interval in seconds
 POLL_INTERVAL=10
+
+# Seconds the wake script waits after wake before checking devices.
+# It also retries for ~10s on top of this if the device hasn't appeared
+# yet (USB DACs and the jack can be slow to re-enumerate).
+WAKE_SETTLE_DELAY=2
 ```
 
 Edit this file to change settings, then restart the daemon:
@@ -192,6 +197,15 @@ Common headphone jack names on Mac Mini:
 - `Line Out`
 
 ## Changelog
+
+### v2.0.3
+- **Wake script retries device detection** — USB DACs and the headphone jack can take several seconds to re-enumerate after wake; the wake script now retries for up to ~10 seconds instead of checking once. The initial settle delay is configurable via `WAKE_SETTLE_DELAY` in the config file.
+- **Daemon survives bad config edits** — a non-numeric or zero `POLL_INTERVAL` previously made the daemon's `sleep` fail and spin at 100% CPU; it now falls back to 10 seconds. The daemon also logs (and recovers) if `SwitchAudioSource` disappears mid-flight, e.g. during a brew upgrade, and verifies each correction actually took effect.
+- **Safer re-install over a running daemon** — generated scripts and the config are now written to a temp file and atomically `mv`'d into place, so a running daemon can't execute a half-written script.
+- **Installer robustness** — manually entered built-in speaker names are validated like the target device; a warning is printed if the target and built-in speaker are the same device; plist paths are XML-escaped; the curl-pipe extracted-directory name is no longer hardcoded (it only matched by case-insensitivity luck); `install-curl.sh` fails loudly if the download/extraction produced nothing.
+- **Uninstaller** — no longer hangs silently when removing the CLI needs a sudo password (prints the manual command instead); also removes the Automator Quick Action.
+- **CLI** — `devices`, `check`, `switch`, and `watch` now fail with a clear message when `SwitchAudioSource` isn't installed instead of printing empty output.
+- **Tests & CI** — new suites cover the generated wake/daemon scripts (extracted from install.sh heredocs), the config-escaping round-trip against hostile device names, and the hotkey toggle script; the CLI install-block tests no longer require network access and pass when run as root; CI additionally runs the suite under macOS system bash 3.2 (what users actually get) and shellchecks every script including the generated ones.
 
 ### v2.0.2
 - **Fix curl-pipe install prompt swallowed by closed stdin** — `curl ... | bash` left install.sh reading from the exhausted curl pipe, so the device-name prompt EOF'd instantly, the installer exited silently, and the user's typed answer leaked to their shell. install-curl.sh now reattaches stdin to `/dev/tty`.

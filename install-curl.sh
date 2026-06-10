@@ -4,6 +4,7 @@
 # Usage: curl -fsSL https://raw.githubusercontent.com/adamdexter/stickyaudio/main/install-curl.sh | bash
 
 set -e
+set -o pipefail
 
 REPO="adamdexter/stickyaudio"
 BRANCH="main"
@@ -22,8 +23,20 @@ echo "Downloading stickyAudio..."
 # Download and extract the repo
 curl -fsSL "https://github.com/$REPO/archive/refs/heads/$BRANCH.tar.gz" | tar -xz -C "$WORKDIR"
 
-# The extracted folder is named stickyaudio-main
-cd "$WORKDIR/stickyaudio-$BRANCH"
+# GitHub names the extracted folder after the repo's *canonical* casing
+# (stickyAudio-main), which only happens to match "stickyaudio-main" on
+# case-insensitive filesystems — don't hardcode it, find the single
+# extracted directory instead.
+SRC_DIR=""
+for d in "$WORKDIR"/*/; do
+    SRC_DIR="$d"
+    break
+done
+if [ -z "$SRC_DIR" ] || [ ! -f "$SRC_DIR/install.sh" ]; then
+    echo "❌ Download or extraction failed (no install.sh in archive)." >&2
+    exit 1
+fi
+cd "$SRC_DIR"
 
 # Run the real installer.
 #

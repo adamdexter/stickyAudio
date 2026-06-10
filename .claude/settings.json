@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "file_path=$(jq -r '.tool_input.file_path // empty'); case \"$file_path\" in */stickyAudio/install.sh|*/stickyAudio/uninstall.sh|*/stickyAudio/stickyaudio|*/stickyAudio/tests/*) cd /Users/adamdexter/Documents/GitHub/stickyAudio && bash tests/run.sh >&2 ;; esac",
+            "command": "file_path=$(jq -r '.tool_input.file_path // empty'); case \"$file_path\" in */stickyAudio/install.sh|*/stickyAudio/uninstall.sh|*/stickyAudio/stickyaudio|*/stickyAudio/tests/*) cd \"${CLAUDE_PROJECT_DIR:-.}\" && bash tests/run.sh >&2 ;; esac",
             "statusMessage": "Running stickyAudio tests..."
           }
         ]

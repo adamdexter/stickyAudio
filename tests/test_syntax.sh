@@ -17,10 +17,13 @@ SCRIPTS=(
     "$REPO_ROOT/uninstall.sh"
     "$REPO_ROOT/stickyaudio"
     "$REPO_ROOT/hotkey-pause-scripts/stickyaudio-toggle.sh"
+    "$REPO_ROOT/hotkey-pause-scripts/alfred/setup-alfred.sh"
+    "$REPO_ROOT/hotkey-pause-scripts/automator/setup-automator.sh"
+    "$REPO_ROOT/hotkey-pause-scripts/shortcuts/setup-shortcut.sh"
 )
 
 for script in "${SCRIPTS[@]}"; do
-    rel="${script#$REPO_ROOT/}"
+    rel="${script#"$REPO_ROOT"/}"
     start_test "syntax: $rel"
     if [ ! -f "$script" ]; then
         fail_test "missing file"

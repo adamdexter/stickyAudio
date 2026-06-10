@@ -33,12 +33,25 @@ fi
 
 # Remove the CLI — may be a symlink (git-checkout install) or a regular
 # file (tarball/curl install copies it).
+# sudo -n (non-interactive): a plain `sudo` with stderr suppressed would
+# sit silently waiting for a password the user can't see.
 for dir in /opt/homebrew/bin /usr/local/bin; do
     if [ -L "$dir/stickyaudio" ] || [ -f "$dir/stickyaudio" ]; then
-        rm "$dir/stickyaudio" 2>/dev/null || sudo rm "$dir/stickyaudio" 2>/dev/null || true
-        echo "✓ Removed $dir/stickyaudio"
+        if rm "$dir/stickyaudio" 2>/dev/null || sudo -n rm "$dir/stickyaudio" 2>/dev/null; then
+            echo "✓ Removed $dir/stickyaudio"
+        else
+            echo "⚠️  Could not remove $dir/stickyaudio (permission denied)."
+            echo "   Remove it manually: sudo rm \"$dir/stickyaudio\""
+        fi
     fi
 done
+
+# Remove the Automator Quick Action if the hotkey setup installed it
+WORKFLOW_DIR="$HOME/Library/Services/Toggle stickyAudio.workflow"
+if [ -d "$WORKFLOW_DIR" ]; then
+    rm -rf "$WORKFLOW_DIR"
+    echo "✓ Removed Automator Quick Action"
+fi
 
 # Remove config directory
 SCRIPT_DIR="$HOME/.config/audio-wake-fix"

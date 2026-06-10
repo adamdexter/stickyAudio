@@ -69,7 +69,7 @@ SANDBOX_OUT="$SANDBOX"
 export SANDBOX_OUT
 
 (
-    cd "$SANDBOX"
+    cd "$SANDBOX" || exit 1
     bash -c "$patched_block" </dev/null
 ) > "$SANDBOX/runner.out" 2>&1
 
@@ -96,7 +96,7 @@ MISSING_TTY="$SANDBOX/nonexistent_tty"
 patched_block="${runner_block//\/dev\/tty/$MISSING_TTY}"
 
 (
-    cd "$SANDBOX"
+    cd "$SANDBOX" || exit 1
     printf 'from-stdin\n' | bash -c "$patched_block"
 ) > "$SANDBOX/runner.out" 2>&1
 

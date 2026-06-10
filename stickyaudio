@@ -6,7 +6,6 @@
 SCRIPT_DIR="$HOME/.config/audio-wake-fix"
 LOG_FILE="$SCRIPT_DIR/audio-wake.log"
 DAEMON_LOG="$SCRIPT_DIR/daemon.log"
-DAEMON_PID_FILE="$SCRIPT_DIR/daemon.pid"
 PAUSE_FILE="$SCRIPT_DIR/paused"
 PLIST_SLEEPWATCHER="$HOME/Library/LaunchAgents/com.audio-wake-fix.sleepwatcher.plist"
 PLIST_DAEMON="$HOME/Library/LaunchAgents/com.audio-wake-fix.daemon.plist"
@@ -32,9 +31,21 @@ done
 # Load config
 load_config() {
     if [ -f "$CONFIG_FILE" ]; then
+        # shellcheck disable=SC1090
         source "$CONFIG_FILE"
     fi
     DEVICE="${DEVICE:-External Headphones}"
+}
+
+# Commands that can't do anything useful without SwitchAudioSource call
+# this to fail loudly instead of printing empty/garbled output.
+require_sas() {
+    if command -v "$SAS" &>/dev/null; then
+        return 0
+    fi
+    echo -e "${RED}SwitchAudioSource not found.${NC}"
+    echo "Install it with: brew install switchaudio-osx"
+    exit 1
 }
 
 usage() {
@@ -125,7 +136,8 @@ cmd_status() {
 
     # Other audio devices (virtual, Bluetooth, aggregate)
     echo -e "${BLUE}Other Audio Devices:${NC}"
-    OTHER_DEVICES=$("$SAS" -a -t output 2>/dev/null | grep -iv "speakers\|External Headphones\|Headphones\|Built-in\|Line Out" || true)
+    # -E alternation: \| in a BRE is a GNU extension; macOS ships BSD grep.
+    OTHER_DEVICES=$("$SAS" -a -t output 2>/dev/null | grep -ivE "speakers|External Headphones|Headphones|Built-in|Line Out" || true)
     if [ -n "$OTHER_DEVICES" ]; then
         echo "$OTHER_DEVICES" | while read -r dev; do
             echo -e "  ${YELLOW}→${NC} $dev"
@@ -154,8 +166,9 @@ cmd_devices() {
     echo -e "${BLUE}=== Audio Output Devices ===${NC}"
     echo ""
     load_config
+    require_sas
+    CURRENT=$("$SAS" -c -t output 2>/dev/null)
     "$SAS" -a -t output 2>/dev/null | while read -r dev; do
-        CURRENT=$("$SAS" -c -t output 2>/dev/null)
         if [ "$dev" = "$CURRENT" ] && [ "$dev" = "$DEVICE" ]; then
             echo -e "  ${GREEN}▶ $dev${NC} (active, target)"
         elif [ "$dev" = "$CURRENT" ]; then
@@ -222,6 +235,7 @@ cmd_history() {
 
 cmd_check() {
     load_config
+    require_sas
     echo -e "${BLUE}Running single check...${NC}"
     echo ""
 
@@ -254,6 +268,7 @@ cmd_check() {
 
 cmd_switch() {
     load_config
+    require_sas
     if ! "$SAS" -a -t output 2>/dev/null | grep -qxF "$DEVICE"; then
         echo -e "${YELLOW}'$DEVICE' is not available${NC} (headphones not plugged in?)"
         exit 1
@@ -305,6 +320,7 @@ cmd_resume() {
 
 cmd_watch() {
     load_config
+    require_sas
     echo -e "${BLUE}Watching audio output changes (Ctrl+C to stop)...${NC}"
     echo ""
     LAST=""

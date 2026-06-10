@@ -2,9 +2,9 @@
 # Shared test helpers — sourced by every test_*.sh script.
 
 if [ -t 1 ]; then
-    RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[0;33m'; NC=$'\033[0m'
+    RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; NC=$'\033[0m'
 else
-    RED=""; GREEN=""; YELLOW=""; NC=""
+    RED=""; GREEN=""; NC=""
 fi
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -77,12 +77,38 @@ extract_cli_block() {
     awk '/# CLI_INSTALL_BLOCK_START/,/# CLI_INSTALL_BLOCK_END/' "$INSTALL_SH"
 }
 
+# Tests must not hit the network (CI and offline dev runs). The install
+# block's download fallback shells out to `curl -o <target>`, so we shadow
+# curl with a stub that "downloads" the repo's own copy of the CLI. Write
+# failures (e.g. unwritable target) still propagate as a non-zero exit,
+# exactly like real curl.
+make_curl_stub() {
+    local bin_dir="$1"
+    mkdir -p "$bin_dir"
+    cat > "$bin_dir/curl" << STUB_EOF
+#!/bin/bash
+out=""
+while [ \$# -gt 0 ]; do
+    if [ "\$1" = "-o" ] && [ \$# -ge 2 ]; then
+        out="\$2"
+        shift
+    fi
+    shift
+done
+[ -n "\$out" ] || exit 2
+exec cp "$REPO_ROOT/stickyaudio" "\$out"
+STUB_EOF
+    chmod +x "$bin_dir/curl"
+}
+
 # Run the CLI install block in a clean subshell with the given working dir
 # and CLI_INSTALL_DIR. Captures stdout+stderr.
 run_cli_block() {
     local cwd="$1"
     local install_dir="$2"
-    local block
+    local block stub_bin
     block="$(extract_cli_block)"
-    (cd "$cwd" && CLI_INSTALL_DIR="$install_dir" bash -c "$block") 2>&1
+    stub_bin="$cwd/.stub-bin"
+    make_curl_stub "$stub_bin"
+    (cd "$cwd" && PATH="$stub_bin:$PATH" CLI_INSTALL_DIR="$install_dir" bash -c "$block") 2>&1
 }

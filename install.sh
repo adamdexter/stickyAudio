@@ -103,9 +103,11 @@ for name in "MacBook Pro Speakers" "MacBook Air Speakers" "Mac Mini Speakers" "M
     fi
 done
 
-# Fallback: look for any device ending in "Speakers" (catches casing variants)
+# Fallback: look for any device ending in "Speakers" (catches casing variants).
+# -E for the alternation: \| in a BRE is a GNU extension, not portable to
+# the BSD grep that ships with macOS.
 if [ -z "$BUILTIN_SPEAKER" ]; then
-    BUILTIN_SPEAKER=$(SwitchAudioSource -a -t output | grep -i "speakers" | grep -iv "airpods\|bluetooth" | head -1)
+    BUILTIN_SPEAKER=$(SwitchAudioSource -a -t output | grep -i "speakers" | grep -ivE "airpods|bluetooth" | head -1)
 fi
 
 if [ -z "$BUILTIN_SPEAKER" ]; then
@@ -121,9 +123,23 @@ if [ -z "$BUILTIN_SPEAKER" ]; then
         echo "   ❌ No speaker name provided. Cannot continue."
         exit 1
     fi
+    if ! SwitchAudioSource -a -t output | grep -qxF "$BUILTIN_SPEAKER"; then
+        echo "⚠️  Warning: \"$BUILTIN_SPEAKER\" does not exactly match any device"
+        echo "   in the list above. Continuing anyway — double-check with"
+        echo "   'stickyaudio devices' after install."
+    fi
 fi
 
 echo "→ Built-in speaker detected as: \"$BUILTIN_SPEAKER\""
+
+if [ "$AUDIO_DEVICE" = "$BUILTIN_SPEAKER" ]; then
+    echo ""
+    echo "⚠️  Target device and built-in speaker are the SAME device"
+    echo "   (\"$AUDIO_DEVICE\"). The daemon only corrects when output falls"
+    echo "   back to the built-in speaker, so this configuration will never"
+    echo "   switch anything. Edit ~/.config/audio-wake-fix/config if this"
+    echo "   isn't what you intended."
+fi
 
 # Create config directory
 SCRIPT_DIR="$HOME/.config/audio-wake-fix"
@@ -137,8 +153,12 @@ escape_for_config() {
 AUDIO_DEVICE_ESC="$(escape_for_config "$AUDIO_DEVICE")"
 BUILTIN_SPEAKER_ESC="$(escape_for_config "$BUILTIN_SPEAKER")"
 
-# Write config file (used by both daemon and CLI)
-cat > "$SCRIPT_DIR/config" << EOF
+# Write config file (used by both daemon and CLI).
+# All generated files are written to a temp name and mv'd into place:
+# a previous daemon may still be running, and bash reads scripts
+# incrementally — truncating a script it's executing makes it run garbage.
+# mv is atomic and leaves the running process on the old inode.
+cat > "$SCRIPT_DIR/config.tmp.$$" << EOF
 # stickyAudio configuration
 # Edit this file to change settings, then restart the daemon:
 #   launchctl unload ~/Library/LaunchAgents/com.audio-wake-fix.daemon.plist
@@ -154,12 +174,17 @@ BUILTIN_SPEAKER="$BUILTIN_SPEAKER_ESC"
 
 # Polling interval in seconds (how often the daemon checks)
 POLL_INTERVAL=10
+
+# Seconds the wake script waits after wake before checking devices.
+# It also retries for ~10s on top of this if the device hasn't appeared.
+WAKE_SETTLE_DELAY=2
 EOF
+mv "$SCRIPT_DIR/config.tmp.$$" "$SCRIPT_DIR/config"
 
 echo "✓ Created config file"
 
 # Create the wake script (for sleepwatcher - handles sleep/wake events)
-cat > "$SCRIPT_DIR/set-audio-output.sh" << 'WAKE_EOF'
+cat > "$SCRIPT_DIR/set-audio-output.sh.tmp.$$" << 'WAKE_EOF'
 #!/bin/bash
 # stickyAudio - Wake event handler
 # Triggered by sleepwatcher when Mac wakes from sleep
@@ -180,21 +205,47 @@ done
 
 # Load config
 if [ -f "$CONFIG_FILE" ]; then
+    # shellcheck disable=SC1090
     source "$CONFIG_FILE"
 fi
 DEVICE="${DEVICE:-External Headphones}"
 
-# Delay to let the system fully wake
-sleep 2
+# Sanitize numeric settings from the sourced config — a bad edit must not
+# break the wake handler.
+WAKE_SETTLE_DELAY="${WAKE_SETTLE_DELAY:-2}"
+case "$WAKE_SETTLE_DELAY" in ''|*[!0-9]*) WAKE_SETTLE_DELAY=2 ;; esac
+WAKE_MAX_ATTEMPTS="${WAKE_MAX_ATTEMPTS:-5}"
+case "$WAKE_MAX_ATTEMPTS" in ''|*[!0-9]*|0) WAKE_MAX_ATTEMPTS=5 ;; esac
 
 log() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') [wake] $1" >> "$LOG_FILE"
 }
 
+# Delay to let the system fully wake
+sleep "$WAKE_SETTLE_DELAY"
+
 log "System woke from sleep"
 
-# Check if the headphone device is available (i.e., something is plugged in)
-if "$SAS" -a -t output | grep -qxF "$DEVICE"; then
+if ! command -v "$SAS" >/dev/null 2>&1; then
+    log "ERROR: SwitchAudioSource not found (brew install switchaudio-osx)"
+    exit 0
+fi
+
+# Check if the headphone device is available (i.e., something is plugged
+# in). The device list can lag several seconds behind wake — USB DACs and
+# the jack re-enumerate slowly — so retry before giving up.
+FOUND=0
+ATTEMPT=1
+while [ "$ATTEMPT" -le "$WAKE_MAX_ATTEMPTS" ]; do
+    if "$SAS" -a -t output 2>/dev/null | grep -qxF "$DEVICE"; then
+        FOUND=1
+        break
+    fi
+    ATTEMPT=$((ATTEMPT + 1))
+    [ "$ATTEMPT" -le "$WAKE_MAX_ATTEMPTS" ] && sleep 2
+done
+
+if [ "$FOUND" -eq 1 ]; then
     CURRENT=$("$SAS" -c -t output)
     log "Device '$DEVICE' available. Current output: $CURRENT"
 
@@ -202,20 +253,27 @@ if "$SAS" -a -t output | grep -qxF "$DEVICE"; then
     "$SAS" -s "$DEVICE" -t output 2>> "$LOG_FILE"
 
     CURRENT=$("$SAS" -c -t output)
-    log "Output is now: $CURRENT"
+    if [ "$CURRENT" = "$DEVICE" ]; then
+        log "Output is now: $CURRENT"
+    else
+        log "WARNING: switch did not take effect; output is still: $CURRENT"
+    fi
 else
-    log "Device '$DEVICE' not detected (nothing plugged in), skipping"
+    log "Device '$DEVICE' not detected after $WAKE_MAX_ATTEMPTS attempt(s) (nothing plugged in?), skipping"
 fi
 
 # Keep log file manageable (last 500 lines)
-tail -500 "$LOG_FILE" > "$LOG_FILE.tmp" && mv "$LOG_FILE.tmp" "$LOG_FILE"
+if [ -f "$LOG_FILE" ]; then
+    tail -500 "$LOG_FILE" > "$LOG_FILE.tmp" && mv "$LOG_FILE.tmp" "$LOG_FILE"
+fi
 WAKE_EOF
 
-chmod +x "$SCRIPT_DIR/set-audio-output.sh"
+chmod +x "$SCRIPT_DIR/set-audio-output.sh.tmp.$$"
+mv "$SCRIPT_DIR/set-audio-output.sh.tmp.$$" "$SCRIPT_DIR/set-audio-output.sh"
 echo "✓ Created wake script"
 
 # Create the polling daemon script
-cat > "$SCRIPT_DIR/stickyaudio-daemon.sh" << 'DAEMON_EOF'
+cat > "$SCRIPT_DIR/stickyaudio-daemon.sh.tmp.$$" << 'DAEMON_EOF'
 #!/bin/bash
 # stickyAudio Daemon - Polls audio output and corrects when needed
 #
@@ -246,11 +304,31 @@ done
 # Load config
 load_config() {
     if [ -f "$CONFIG_FILE" ]; then
+        # shellcheck disable=SC1090
         source "$CONFIG_FILE"
     fi
     DEVICE="${DEVICE:-External Headphones}"
     BUILTIN_SPEAKER="${BUILTIN_SPEAKER:-Mac Mini Speakers}"
     POLL_INTERVAL="${POLL_INTERVAL:-10}"
+    # Sanitize: a non-numeric or zero interval would make `sleep` fail
+    # instantly and spin this loop at 100% CPU.
+    case "$POLL_INTERVAL" in ''|*[!0-9]*|0) POLL_INTERVAL=10 ;; esac
+}
+
+# Re-probe for SwitchAudioSource. Called when it's missing so the daemon
+# recovers if Homebrew (re)installs it while we're running.
+resolve_sas() {
+    SAS=""
+    local p
+    for p in /opt/homebrew/bin/SwitchAudioSource /usr/local/bin/SwitchAudioSource; do
+        if [ -x "$p" ]; then
+            SAS="$p"
+            return 0
+        fi
+    done
+    if command -v SwitchAudioSource >/dev/null 2>&1; then
+        SAS="SwitchAudioSource"
+    fi
 }
 
 log() {
@@ -300,6 +378,23 @@ while true; do
         continue
     fi
 
+    # If SwitchAudioSource is missing (e.g. brew upgrade in flight), log
+    # once and keep re-probing instead of silently no-opping forever.
+    if ! command -v "$SAS" >/dev/null 2>&1; then
+        resolve_sas
+        if [ -z "$SAS" ] || ! command -v "$SAS" >/dev/null 2>&1; then
+            if [ "${SAS_MISSING_LOGGED:-0}" -eq 0 ]; then
+                log "ERROR: SwitchAudioSource not found (brew install switchaudio-osx); will keep checking"
+                SAS_MISSING_LOGGED=1
+            fi
+            SAS="SwitchAudioSource"
+            sleep "$POLL_INTERVAL"
+            continue
+        fi
+        log "SwitchAudioSource found again at: $SAS"
+        SAS_MISSING_LOGGED=0
+    fi
+
     CURRENT=$("$SAS" -c -t output 2>/dev/null)
 
     # Log output changes for debugging
@@ -315,9 +410,14 @@ while true; do
     # 4. Current output is not already the target device
     if [ "$CURRENT" != "$DEVICE" ] && [ "$CURRENT" = "$BUILTIN_SPEAKER" ]; then
         if "$SAS" -a -t output 2>/dev/null | grep -qxF "$DEVICE"; then
-            log "CORRECTED: '$CURRENT' → '$DEVICE' (headphones plugged in but output was on internal speaker)"
             "$SAS" -s "$DEVICE" -t output 2>> "$LOG_FILE"
-            LAST_OUTPUT="$DEVICE"
+            NOW=$("$SAS" -c -t output 2>/dev/null)
+            if [ "$NOW" = "$DEVICE" ]; then
+                log "CORRECTED: '$CURRENT' → '$DEVICE' (headphones plugged in but output was on internal speaker)"
+            else
+                log "WARNING: correction to '$DEVICE' did not take effect; output is '$NOW'"
+            fi
+            LAST_OUTPUT="$NOW"
         fi
     fi
 
@@ -325,7 +425,8 @@ while true; do
 done
 DAEMON_EOF
 
-chmod +x "$SCRIPT_DIR/stickyaudio-daemon.sh"
+chmod +x "$SCRIPT_DIR/stickyaudio-daemon.sh.tmp.$$"
+mv "$SCRIPT_DIR/stickyaudio-daemon.sh.tmp.$$" "$SCRIPT_DIR/stickyaudio-daemon.sh"
 echo "✓ Created polling daemon script"
 
 # Create sleepwatcher wakeup hook
@@ -336,6 +437,15 @@ echo "✓ Created ~/.wakeup symlink"
 LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
 mkdir -p "$LAUNCH_AGENTS_DIR"
 
+# Paths are interpolated into XML — escape the three reserved characters
+# so an unusual $HOME (e.g. containing '&') can't produce an invalid plist.
+escape_for_xml() {
+    printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
+}
+HOME_XML="$(escape_for_xml "$HOME")"
+SCRIPT_DIR_XML="$(escape_for_xml "$SCRIPT_DIR")"
+SLEEPWATCHER_BIN_XML="$(escape_for_xml "$SLEEPWATCHER_BIN")"
+
 cat > "$LAUNCH_AGENTS_DIR/com.audio-wake-fix.sleepwatcher.plist" << EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -345,10 +455,10 @@ cat > "$LAUNCH_AGENTS_DIR/com.audio-wake-fix.sleepwatcher.plist" << EOF
     <string>com.audio-wake-fix.sleepwatcher</string>
     <key>ProgramArguments</key>
     <array>
-        <string>$SLEEPWATCHER_BIN</string>
+        <string>$SLEEPWATCHER_BIN_XML</string>
         <string>-V</string>
         <string>-w</string>
-        <string>$HOME/.wakeup</string>
+        <string>$HOME_XML/.wakeup</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
@@ -371,16 +481,18 @@ cat > "$LAUNCH_AGENTS_DIR/com.audio-wake-fix.daemon.plist" << EOF
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
-        <string>$SCRIPT_DIR/stickyaudio-daemon.sh</string>
+        <string>$SCRIPT_DIR_XML/stickyaudio-daemon.sh</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
     <true/>
+    <key>ProcessType</key>
+    <string>Background</string>
     <key>StandardOutPath</key>
-    <string>$SCRIPT_DIR/daemon-stdout.log</string>
+    <string>$SCRIPT_DIR_XML/daemon-stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>$SCRIPT_DIR/daemon-stderr.log</string>
+    <string>$SCRIPT_DIR_XML/daemon-stderr.log</string>
 </dict>
 </plist>
 EOF
@@ -419,7 +531,9 @@ CLI_INSTALLED=0
 # Clear any stale or dangling symlink at the target (e.g. left over from
 # a prior failed install). Both cp and curl -o follow symlinks at the
 # destination and fail if the target's parent directory has been deleted.
-rm -f "$CLI_TARGET" 2>/dev/null
+# `|| true`: rm of an existing-but-unremovable target exits 1, which would
+# otherwise kill the installer under `set -e` before the loud-error path.
+rm -f "$CLI_TARGET" 2>/dev/null || true
 
 if [ -f "$SCRIPT_SOURCE" ]; then
     chmod +x "$SCRIPT_SOURCE"
@@ -439,7 +553,7 @@ fi
 # Fall back to downloading from GitHub (covers `curl ... | bash` installs
 # that pipe install.sh directly without an unpacked source tree).
 if [ "$CLI_INSTALLED" -eq 0 ]; then
-    rm -f "$CLI_TARGET" 2>/dev/null
+    rm -f "$CLI_TARGET" 2>/dev/null || true
     if curl -fsSL "$CLI_REMOTE_URL" -o "$CLI_TARGET" 2>/dev/null && chmod +x "$CLI_TARGET" 2>/dev/null; then
         echo "✓ Installed 'stickyaudio' CLI to $CLI_TARGET (downloaded)"
         CLI_INSTALLED=1

@@ -111,13 +111,12 @@ else
 fi
 
 # ── Test 3: both paths fail (loud-error guarantee) ────────────────────────
-# Clear the install dir and make it read-only. Both symlink and download
-# must fail; the script must print the manual recovery command.
-chmod +w "$INSTALL_DIR"
-rm -f "$INSTALL_DIR/stickyaudio"
-chmod -w "$INSTALL_DIR"
-output="$(run_cli_block "$ELSEWHERE_DIR" "$INSTALL_DIR" || true)"
-chmod +w "$INSTALL_DIR"
+# Point the install dir below a regular file: every write fails with
+# ENOTDIR. (chmod -w would be bypassed when the suite runs as root, e.g.
+# in containers — ENOTDIR fails for every uid.)
+BLOCKED_PARENT="$SANDBOX/blocked-not-a-dir"
+: > "$BLOCKED_PARENT"
+output="$(run_cli_block "$ELSEWHERE_DIR" "$BLOCKED_PARENT/bin" || true)"
 
 start_test "both-fail: error header printed"
 assert_contains "$output" "Could not install"
