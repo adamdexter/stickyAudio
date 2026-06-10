@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# stickyAudio Installer v2.0
+# stickyAudio Installer v2.0.3
 # Ensures audio output stays on the headphone jack, even after
 # sleep/wake, Bluetooth connect/disconnect, and coreaudiod restarts.
 

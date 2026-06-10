@@ -1,6 +1,6 @@
 # stickyAudio
 
-> **v2.0** — Now with polling daemon, CLI debug tools, and pause/resume
+> **v2.0.3** — Hardened daemon & wake script, wake-time device retries, expanded test suite & CI
 
 Keeps your Mac's audio output pinned to the headphone jack. Automatically corrects when macOS switches to the internal speaker after sleep/wake, Bluetooth disconnect, or coreaudiod restarts.
 

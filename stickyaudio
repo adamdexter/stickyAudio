@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# stickyaudio - CLI debug and management tool for stickyAudio v2.0
+# stickyaudio - CLI debug and management tool for stickyAudio v2.0.3
 # Usage: stickyaudio <command> [options]
 
 SCRIPT_DIR="$HOME/.config/audio-wake-fix"
